@@ -17,6 +17,7 @@ services:
       MATRIX_HOST: "0.0.0.0"
       MATRIX_PORT: "25000"
       PUBLIC_MATRIX_HOST: "${PUBLIC_MATRIX_HOST:-127.0.0.1}"
+      MATRIX_PUBLIC_PORT: "${MATRIX_PUBLIC_PORT:-25000}"
       PUBLIC_API_HOST: "${PUBLIC_API_HOST:-https://firefall.mutar.com.br}"
       PUBLIC_FRONTEND_HOST: "${PUBLIC_FRONTEND_HOST:-https://firefall.mutar.com.br}"
       RUST_LOG: "firefall_server=debug,tower_http=debug"
