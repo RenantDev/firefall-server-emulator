@@ -70,7 +70,7 @@ services:
   # Apos o primeiro deploy, acesse os logs do container playit para obter o claim URL,
   # ou use a secret key gerada no painel playit.gg.
   playit:
-    image: ghcr.io/playit-cloud/playit-agent:0.16
+    image: ghcr.io/playit-cloud/playit-agent:0.17
     restart: unless-stopped
     environment:
       - SECRET_KEY=${PLAYIT_SECRET:-}
