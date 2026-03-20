@@ -1,0 +1,28 @@
+# Firefall Server Emulator Configuration
+
+[api]
+host = "0.0.0.0"
+port = 8080
+
+[matrix]
+host = "0.0.0.0"
+port = 25000
+tick_rate = 20  # updates per second
+
+[database]
+url = "postgres://firefall:firefall@localhost:5432/firefall"
+max_connections = 20
+
+[redis]
+url = "redis://localhost:6379"
+
+[game]
+server_name = "Firefall Emulator"
+default_zone = "New Eden"
+max_players = 100
+character_limit = 4
+vip_character_limit = 8
+
+[logging]
+level = "debug"
+format = "pretty"  # pretty | json

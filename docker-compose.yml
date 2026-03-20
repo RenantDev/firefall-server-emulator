@@ -1,0 +1,87 @@
+services:
+  # === Firefall API Server (clientapi_host) ===
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: firefall-api
+    ports:
+      - "8080:8080"    # REST API HTTP (clientapi_host + operator)
+      - "25000:25000"  # Matrix game server (future)
+    environment:
+      DATABASE_URL: postgres://firefall:firefall@db:5432/firefall
+      REDIS_URL: redis://redis:6379
+      API_HOST: "0.0.0.0"
+      API_PORT: "8080"
+      MATRIX_HOST: "0.0.0.0"
+      MATRIX_PORT: "25000"
+      PUBLIC_MATRIX_HOST: "127.0.0.1"
+      PUBLIC_API_HOST: "http://127.0.0.1:8080"
+      PUBLIC_FRONTEND_HOST: "http://127.0.0.1:8080"
+      RUST_LOG: "firefall_server=debug,tower_http=debug"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - firefall
+
+  # === PostgreSQL Database ===
+  db:
+    image: postgres:16-alpine
+    container_name: firefall-db
+    environment:
+      POSTGRES_USER: firefall
+      POSTGRES_PASSWORD: firefall
+      POSTGRES_DB: firefall
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U firefall"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - firefall
+
+  # === Redis Cache ===
+  redis:
+    image: redis:7-alpine
+    container_name: firefall-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - firefall
+
+  # === Frontend Host (paginas web simples) ===
+  frontend:
+    image: nginx:alpine
+    container_name: firefall-frontend
+    ports:
+      - "8081:80"
+    volumes:
+      - ./server/frontend:/usr/share/nginx/html:ro
+    restart: unless-stopped
+    networks:
+      - firefall
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  firefall:
+    driver: bridge
