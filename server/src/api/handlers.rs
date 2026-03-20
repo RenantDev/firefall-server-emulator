@@ -239,7 +239,9 @@ pub async fn oracle_ticket(
     }
 
     let matrix_host = std::env::var("PUBLIC_MATRIX_HOST").unwrap_or_else(|_| "127.0.0.1".into());
-    let matrix_port = std::env::var("MATRIX_PORT").unwrap_or_else(|_| "25000".into());
+    // MATRIX_PUBLIC_PORT: porta publica (playit.gg tunnel), fallback para MATRIX_PORT (local)
+    let matrix_port = std::env::var("MATRIX_PUBLIC_PORT")
+        .unwrap_or_else(|_| std::env::var("MATRIX_PORT").unwrap_or_else(|_| "25000".into()));
     let session_id = Uuid::new_v4().to_string();
 
     // Ticket dummy de 76 bytes em base64 (>55 bytes conforme exigido)
