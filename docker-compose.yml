@@ -1,11 +1,13 @@
 services:
-  # === Firefall API Server (clientapi_host) ===
+  # === Firefall API Server (clientapi_host + Matrix UDP) ===
   api:
     build:
       context: ./server
       dockerfile: Dockerfile
     expose:
       - "8080"
+      - "25000"
+      - "25001"
     environment:
       DATABASE_URL: postgres://firefall:firefall@db:5432/firefall
       REDIS_URL: redis://redis:6379
@@ -59,6 +61,19 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - firefall
+
+  # === Playit.gg Tunnel Agent ===
+  # Cria tuneis UDP para Matrix (25000) e Game (25001) sem expor IP do servidor.
+  # Configure PLAYIT_SECRET em Settings > Environment no Dokploy.
+  # Apos o primeiro deploy, acesse os logs do container playit para obter o claim URL,
+  # ou use a secret key gerada no painel playit.gg.
+  playit:
+    image: ghcr.io/playit-cloud/playit-agent:0.16
+    restart: unless-stopped
+    environment:
+      - SECRET_KEY=${PLAYIT_SECRET:-}
     networks:
       - firefall
 
