@@ -982,9 +982,9 @@ pub async fn operator_check(
     Query(query): Query<OperatorQuery>,
 ) -> AppResult<serde_json::Value> {
     let api_host = std::env::var("PUBLIC_API_HOST")
-        .unwrap_or_else(|_| "http://127.0.0.1:8080".into());
+        .unwrap_or_else(|_| "https://firefall.mutar.com.br".into());
     let frontend_host = std::env::var("PUBLIC_FRONTEND_HOST")
-        .unwrap_or_else(|_| "http://127.0.0.1:8080".into());
+        .unwrap_or_else(|_| "https://firefall.mutar.com.br".into());
 
     tracing::info!(
         "=== GET /check === environment={:?}, build={:?}",
