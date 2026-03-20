@@ -6,8 +6,9 @@ services:
       dockerfile: Dockerfile
     expose:
       - "8080"
-      - "25000"
-      - "25001"
+    ports:
+      - "25000:25000/udp"
+      - "25001:25001/udp"
     environment:
       DATABASE_URL: postgres://firefall:firefall@db:5432/firefall
       REDIS_URL: redis://redis:6379
@@ -16,8 +17,8 @@ services:
       MATRIX_HOST: "0.0.0.0"
       MATRIX_PORT: "25000"
       PUBLIC_MATRIX_HOST: "${PUBLIC_MATRIX_HOST:-127.0.0.1}"
-      PUBLIC_API_HOST: "${PUBLIC_API_HOST:-http://127.0.0.1:8080}"
-      PUBLIC_FRONTEND_HOST: "${PUBLIC_FRONTEND_HOST:-http://127.0.0.1:8080}"
+      PUBLIC_API_HOST: "${PUBLIC_API_HOST:-https://firefall.mutar.com.br}"
+      PUBLIC_FRONTEND_HOST: "${PUBLIC_FRONTEND_HOST:-https://firefall.mutar.com.br}"
       RUST_LOG: "firefall_server=debug,tower_http=debug"
     depends_on:
       db:
@@ -65,17 +66,13 @@ services:
       - firefall
 
   # === Playit.gg Tunnel Agent ===
-  # Cria tuneis UDP para Matrix (25000) e Game (25001) sem expor IP do servidor.
-  # Configure PLAYIT_SECRET em Settings > Environment no Dokploy.
-  # Apos o primeiro deploy, acesse os logs do container playit para obter o claim URL,
-  # ou use a secret key gerada no painel playit.gg.
+  # network_mode: host para que 127.0.0.1:25000 aponte para a porta UDP exposta do api
   playit:
     image: ghcr.io/playit-cloud/playit-agent:0.17
     restart: unless-stopped
+    network_mode: host
     environment:
       - SECRET_KEY=${PLAYIT_SECRET:-}
-    networks:
-      - firefall
 
 volumes:
   pgdata:
