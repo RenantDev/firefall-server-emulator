@@ -300,46 +300,52 @@ pub async fn list_characters(
             let gender_str = if c.gender == 0 { "male" } else { "female" };
 
             // Construir visuals com os dados salvos do personagem
-            // IDs baseados no que o client envia na criacao e nos defaults do PIN
+            // IDs de CharacterCreation.lua: head, head_accessory_a, skin_color_id, eye_color_id, hair_color_id
             let head_id = if c.head > 0 { c.head } else { 10002 };
-            let eye_color_id = if c.eye_color > 0 { c.eye_color } else { 77184 };
-            let skin_color_id = if c.skin_color > 0 { c.skin_color } else { 77179 };
-            let hair_color_id = if c.hair_color > 0 { c.hair_color } else { 77189 };
+            let hair_id = if c.hair_color > 0 { 10089 } else { 10089 }; // head_accessory_a default
+            let skin_color_id = if c.skin_color > 0 { c.skin_color } else { 118969 };
+            let eye_color_id = if c.eye_color > 0 { c.eye_color } else { 118981 };
+            let hair_color_id = if c.hair_color > 0 { c.hair_color } else { 119430 };
+
+            // Validar frame_sdb_id - deve ser um dos 5 frames base
+            let valid_frame = match c.frame_sdb_id {
+                76164 | 75773 | 75775 | 75774 | 75772 |
+                118933 | 118934 | 118935 | 118936 | 118937 => c.frame_sdb_id,
+                _ => 76164, // default Assault
+            };
 
             let visuals = serde_json::json!({
                 "head": {"id": head_id},
-                "eyes": {"id": eye_color_id},
+                "eyes": {"id": 0},
+                "head_accessories": [
+                    {"id": hair_id},
+                    {"id": 0}
+                ],
+                "ornaments": [],
                 "skin_color": {
                     "id": skin_color_id,
                     "value": {"color": "#A0785A"}
                 },
+                "lip_color": {
+                    "id": 0,
+                    "value": {"color": "#A0785A"}
+                },
                 "eye_color": {
                     "id": eye_color_id,
-                    "value": {"color": "#4488AA"}
+                    "value": {"color": "#4A6E8C"}
                 },
                 "hair_color": {
                     "id": hair_color_id,
                     "value": {"color": "#2C1A0E"}
                 },
-                "lip_color": {
-                    "id": 0,
-                    "value": {"color": "#884444"}
-                },
                 "facial_hair_color": {
                     "id": 0,
                     "value": {"color": "#2C1A0E"}
                 },
-                "head_accessories": [
-                    {"id": 10089},
-                    {"id": 0}
-                ],
-                "ornaments": [
-                    {"id": 0}, {"id": 0}, {"id": 0}, {"id": 0}, {"id": 0}
-                ],
                 "warpaint": [
-                    "#1a1a1a", "#1a1a1a", "#1a1a1a",
-                    "#1a1a1a", "#1a1a1a",
-                    "#40FFC4", "#40FFC4"
+                    "#1A1A1A", "#2A2A2A", "#3A3A3A",
+                    "#0A0A0A", "#1B1B1B",
+                    "#00AAFF", "#0066FF"
                 ],
                 "warpaint_patterns": [],
                 "decals": []
@@ -356,7 +362,7 @@ pub async fn list_characters(
                 "time_played_secs": c.time_played_secs,
                 "needs_name_change": false,
                 "max_frame_level": 40,
-                "frame_sdb_id": c.frame_sdb_id,
+                "frame_sdb_id": valid_frame,
                 "current_level": c.level,
                 "gender": c.gender,
                 "current_gender": gender_str,
