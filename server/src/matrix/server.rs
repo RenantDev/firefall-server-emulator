@@ -8,8 +8,17 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::net::UdpSocket;
 
+use super::messages::{
+    self, MatrixAck, TimeSyncRequest, TimeSyncResponse,
+    WelcomeToTheMatrix, EnterZone, LoginMessage,
+    CTRL_MATRIX_ACK, CTRL_GSS_ACK, CTRL_TIME_SYNC_REQUEST, CTRL_TIME_SYNC_RESPONSE,
+    MSG_LOGIN, MSG_WELCOME_TO_THE_MATRIX, MSG_ENTER_ZONE,
+    MSG_ENTER_ZONE_ACK, MSG_CLIENT_STATUS, MSG_CLIENT_PREFERENCES,
+    MSG_SUPER_PING, MSG_KEYFRAME_REQUEST,
+};
 use super::packet::{
     self, ClientPacket, ServerPacket, PROTOCOL_VERSION,
 };
@@ -32,6 +41,8 @@ pub struct MatrixServer {
     sessions: SessionManager,
     /// Porta do game server (informada ao client no HUGG)
     game_port: u16,
+    /// Timestamp de inicio do servidor (para time sync)
+    start_time: Instant,
 }
 
 impl MatrixServer {
@@ -49,6 +60,7 @@ impl MatrixServer {
             socket: Arc::new(socket),
             sessions: SessionManager::new(),
             game_port: DEFAULT_GAME_PORT,
+            start_time: Instant::now(),
         })
     }
 
@@ -305,52 +317,572 @@ impl MatrixServer {
             payload.len()
         );
 
+        // Log hex dump completo do payload para analise do protocolo
+        if !payload.is_empty() {
+            let hex: String = payload
+                .iter()
+                .take(128)
+                .map(|b| format!("{:02X}", b))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let suffix = if payload.len() > 128 { "..." } else { "" };
+            tracing::info!(
+                "  canal {} hex [{}B]: {}{}",
+                channel,
+                payload.len(),
+                hex,
+                suffix
+            );
+        }
+
         // Canal 0: controle (ACK/NACK/time sync)
         // Canal 1: reliable, mensagens abstratas (login, etc)
         // Canal 2: reliable + GSS header
         // Canal 3: unreliable + GSS header
         match channel {
             0 => {
-                // Canal de controle - pode ser time sync, ACK, NACK
-                tracing::debug!(
-                    "Canal 0 (controle): {} bytes de {}",
-                    payload.len(),
-                    addr
-                );
-                // TODO: implementar respostas de controle (ACK, time sync)
+                self.handle_channel0_control(addr, socket_id, payload).await?;
             }
             1 => {
-                // Canal reliable - mensagens como login
-                tracing::info!(
-                    "Canal 1 (reliable): {} bytes de {} - provavelmente mensagem de login",
-                    payload.len(),
-                    addr
-                );
-                // TODO: parsear mensagens reliable (login, etc)
+                self.handle_channel1_reliable(addr, socket_id, payload).await?;
             }
             2 => {
-                // Canal reliable + GSS
-                tracing::debug!(
-                    "Canal 2 (reliable+GSS): {} bytes de {}",
-                    payload.len(),
-                    addr
-                );
-                // TODO: parsear GSS messages
+                self.handle_channel2_reliable_gss(addr, socket_id, payload).await?;
             }
             3 => {
-                // Canal unreliable + GSS
-                tracing::debug!(
-                    "Canal 3 (unreliable+GSS): {} bytes de {}",
-                    payload.len(),
-                    addr
-                );
-                // TODO: parsear GSS messages
+                self.handle_channel3_unreliable_gss(addr, socket_id, payload).await?;
             }
             _ => {
                 tracing::warn!("Canal invalido {} de {}", channel, addr);
             }
         }
 
+        Ok(())
+    }
+
+    // ==================== Handlers de Canal ====================
+
+    /// Canal 0: mensagens de controle (ACK, TimeSync, keepalive)
+    /// Formato: [uint8 MessageId] [message_data...]
+    async fn handle_channel0_control(
+        &self,
+        addr: SocketAddr,
+        socket_id: u32,
+        payload: &[u8],
+    ) -> anyhow::Result<()> {
+        let (msg_id, msg_data) = match messages::parse_control_payload(payload) {
+            Some(parsed) => parsed,
+            None => {
+                tracing::warn!(
+                    "Canal 0: payload de controle vazio de {} (socket 0x{:08X})",
+                    addr,
+                    socket_id
+                );
+                return Ok(());
+            }
+        };
+
+        tracing::debug!(
+            "Canal 0: msg_id={}, data_len={} de {} (socket 0x{:08X})",
+            msg_id,
+            msg_data.len(),
+            addr,
+            socket_id
+        );
+
+        match msg_id {
+            CTRL_MATRIX_ACK => {
+                // Client enviando ACK para nossos pacotes reliable (canal 1)
+                if let Some(ack) = MatrixAck::parse(msg_data) {
+                    tracing::debug!(
+                        "MatrixAck recebido: next_seq={}, ack_for={} de socket 0x{:08X}",
+                        ack.next_seq_num,
+                        ack.ack_for_num,
+                        socket_id
+                    );
+                    // TODO: marcar pacotes como confirmados, parar retransmissao
+                } else {
+                    tracing::warn!(
+                        "MatrixAck malformado: {} bytes de socket 0x{:08X}",
+                        msg_data.len(),
+                        socket_id
+                    );
+                }
+            }
+            CTRL_GSS_ACK => {
+                // Client enviando ACK para pacotes GSS reliable (canal 2)
+                if let Some(ack) = messages::GssAck::parse(msg_data) {
+                    tracing::debug!(
+                        "GssAck recebido: next_seq={}, ack_for={} de socket 0x{:08X}",
+                        ack.next_seq_num,
+                        ack.ack_for_num,
+                        socket_id
+                    );
+                    // TODO: marcar pacotes GSS como confirmados
+                } else {
+                    tracing::warn!(
+                        "GssAck malformado: {} bytes de socket 0x{:08X}",
+                        msg_data.len(),
+                        socket_id
+                    );
+                }
+            }
+            CTRL_TIME_SYNC_REQUEST => {
+                // Fase 3: TimeSyncRequest do client
+                self.handle_time_sync(addr, socket_id, msg_data).await?;
+            }
+            _ => {
+                tracing::warn!(
+                    "Canal 0: msg_id desconhecido {} ({} bytes) de socket 0x{:08X}",
+                    msg_id,
+                    msg_data.len(),
+                    socket_id
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Canal 1: mensagens reliable com numero de sequencia
+    /// Formato: [uint16 SeqNum] [uint8 MessageId] [message_data...]
+    async fn handle_channel1_reliable(
+        &self,
+        addr: SocketAddr,
+        socket_id: u32,
+        payload: &[u8],
+    ) -> anyhow::Result<()> {
+        let (seq_num, msg_id, msg_data) = match messages::parse_reliable_payload(payload) {
+            Some(parsed) => parsed,
+            None => {
+                tracing::warn!(
+                    "Canal 1: payload reliable muito curto ({} bytes) de {} (socket 0x{:08X})",
+                    payload.len(),
+                    addr,
+                    socket_id
+                );
+                return Ok(());
+            }
+        };
+
+        tracing::info!(
+            "Canal 1 reliable: seq={}, msg_id=0x{:02X}, data_len={} de socket 0x{:08X}",
+            seq_num,
+            msg_id,
+            msg_data.len(),
+            socket_id
+        );
+
+        // Fase 1: Atualizar recv_seq e enviar ACK
+        self.sessions.update_recv_seq(socket_id, seq_num).await;
+        self.send_matrix_ack(addr, socket_id, seq_num).await?;
+
+        // Processar mensagem pelo tipo
+        match msg_id {
+            MSG_LOGIN => {
+                // Fase 2: Login do client
+                self.handle_login(addr, socket_id, msg_data).await?;
+            }
+            MSG_ENTER_ZONE_ACK => {
+                // Client confirma entrada na zona
+                tracing::info!(
+                    "EnterZoneAck recebido de socket 0x{:08X} ({} bytes)",
+                    socket_id,
+                    msg_data.len()
+                );
+            }
+            MSG_CLIENT_STATUS => {
+                // Status periodico do client (pode ignorar para MVP)
+                tracing::debug!(
+                    "ClientStatus recebido de socket 0x{:08X} ({} bytes)",
+                    socket_id,
+                    msg_data.len()
+                );
+            }
+            MSG_CLIENT_PREFERENCES => {
+                tracing::debug!(
+                    "ClientPreferences recebido de socket 0x{:08X} ({} bytes)",
+                    socket_id,
+                    msg_data.len()
+                );
+            }
+            MSG_KEYFRAME_REQUEST => {
+                tracing::info!(
+                    "KeyframeRequest recebido de socket 0x{:08X} ({} bytes)",
+                    socket_id,
+                    msg_data.len()
+                );
+                // TODO: enviar keyframe com estado atual do mundo
+            }
+            MSG_SUPER_PING => {
+                tracing::debug!(
+                    "SuperPing recebido de socket 0x{:08X} ({} bytes)",
+                    socket_id,
+                    msg_data.len()
+                );
+                // TODO: responder com SuperPong (ID 59)
+            }
+            _ => {
+                tracing::warn!(
+                    "Canal 1: msg_id desconhecido {} (0x{:02X}) (seq={}, {} bytes) de socket 0x{:08X}",
+                    msg_id,
+                    msg_id,
+                    seq_num,
+                    msg_data.len(),
+                    socket_id
+                );
+                // Log hex do payload completo para analise futura
+                let hex: String = msg_data
+                    .iter()
+                    .take(64)
+                    .map(|b| format!("{:02X}", b))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                tracing::info!("  msg_data hex: {}", hex);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Canal 2: reliable + GSS header
+    /// Formato: [uint16 SeqNum] [GSS header + data]
+    async fn handle_channel2_reliable_gss(
+        &self,
+        addr: SocketAddr,
+        socket_id: u32,
+        payload: &[u8],
+    ) -> anyhow::Result<()> {
+        // Extrair numero de sequencia
+        if payload.len() < 2 {
+            tracing::warn!(
+                "Canal 2: payload muito curto ({} bytes) de socket 0x{:08X}",
+                payload.len(),
+                socket_id
+            );
+            return Ok(());
+        }
+
+        let seq_num = u16::from_be_bytes([payload[0], payload[1]]);
+        let gss_data = &payload[2..];
+
+        tracing::debug!(
+            "Canal 2 (reliable+GSS): seq={}, gss_data={} bytes de socket 0x{:08X}",
+            seq_num,
+            gss_data.len(),
+            socket_id
+        );
+
+        // Enviar ACK para o pacote reliable (via canal 0, GssAck)
+        self.send_gss_ack(addr, socket_id, seq_num).await?;
+
+        // TODO: parsear GSS header e processar entidades/gameplay
+        if !gss_data.is_empty() {
+            let hex: String = gss_data
+                .iter()
+                .take(64)
+                .map(|b| format!("{:02X}", b))
+                .collect::<Vec<_>>()
+                .join(" ");
+            tracing::debug!("  GSS hex: {}", hex);
+        }
+
+        Ok(())
+    }
+
+    /// Canal 3: unreliable + GSS header (sem sequencia)
+    async fn handle_channel3_unreliable_gss(
+        &self,
+        addr: SocketAddr,
+        socket_id: u32,
+        payload: &[u8],
+    ) -> anyhow::Result<()> {
+        tracing::debug!(
+            "Canal 3 (unreliable+GSS): {} bytes de {} (socket 0x{:08X})",
+            payload.len(),
+            addr,
+            socket_id
+        );
+
+        // TODO: parsear GSS header e processar (posicao, rotacao, etc)
+        if !payload.is_empty() {
+            let hex: String = payload
+                .iter()
+                .take(64)
+                .map(|b| format!("{:02X}", b))
+                .collect::<Vec<_>>()
+                .join(" ");
+            tracing::debug!("  GSS unreliable hex: {}", hex);
+        }
+
+        Ok(())
+    }
+
+    // ==================== Fase 2: Login Flow ====================
+
+    /// Processa mensagem de Login do client (canal 1, msg_id = MSG_LOGIN)
+    async fn handle_login(
+        &self,
+        addr: SocketAddr,
+        socket_id: u32,
+        msg_data: &[u8],
+    ) -> anyhow::Result<()> {
+        tracing::info!(
+            "=== LOGIN recebido de {} (socket 0x{:08X}), {} bytes ===",
+            addr,
+            socket_id,
+            msg_data.len()
+        );
+
+        // Log hex completo do login para analise
+        let hex: String = msg_data
+            .iter()
+            .map(|b| format!("{:02X}", b))
+            .collect::<Vec<_>>()
+            .join(" ");
+        tracing::info!("Login payload hex completo [{}B]: {}", msg_data.len(), hex);
+
+        // Parsear o que conseguirmos
+        let login = match LoginMessage::parse(msg_data) {
+            Some(l) => l,
+            None => {
+                tracing::error!(
+                    "Falha ao parsear LoginMessage de socket 0x{:08X}",
+                    socket_id
+                );
+                return Ok(());
+            }
+        };
+
+        tracing::info!(
+            "Login parseado: is_dev={}, client_version={}, unk2='{}', character_guid=0x{:016X}",
+            login.character_is_dev,
+            login.client_version,
+            login.unk2,
+            login.character_guid
+        );
+
+        // Definir character_guid na sessao (usar fallback se for 0)
+        let char_guid = if login.character_guid != 0 {
+            login.character_guid
+        } else {
+            0xFFFF_0000_0000_0001
+        };
+        self.sessions.set_login_data(socket_id, char_guid).await;
+
+        // Enviar WelcomeToTheMatrix (Fase 2)
+        self.send_welcome_to_matrix(addr, socket_id, char_guid).await?;
+
+        // Pequeno delay para dar tempo ao client processar o Welcome
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Enviar EnterZone (Fase 2)
+        let zone_id = 1; // Zona padrao (Copacabana/New Eden)
+        self.send_enter_zone(addr, socket_id, zone_id).await?;
+
+        Ok(())
+    }
+
+    /// Envia WelcomeToTheMatrix para o client (canal 1, reliable)
+    async fn send_welcome_to_matrix(
+        &self,
+        addr: SocketAddr,
+        socket_id: u32,
+        player_id: u64,
+    ) -> anyhow::Result<()> {
+        let welcome = WelcomeToTheMatrix {
+            player_id,
+            unk1: vec![], // Array vazio para MVP
+            unk2: vec![], // Array vazio para MVP
+        };
+
+        tracing::info!(
+            "Enviando WelcomeToTheMatrix: player_id=0x{:016X} para socket 0x{:08X}",
+            player_id,
+            socket_id
+        );
+
+        let msg_data = welcome.serialize();
+        self.send_reliable(addr, socket_id, MSG_WELCOME_TO_THE_MATRIX, &msg_data).await
+    }
+
+    /// Envia EnterZone para o client (canal 1, reliable)
+    async fn send_enter_zone(
+        &self,
+        addr: SocketAddr,
+        socket_id: u32,
+        zone_id: u32,
+    ) -> anyhow::Result<()> {
+        // Gerar instance_id unico baseado no zone_id
+        let instance_id = 0x0000_0001_0000_0000u64 | (zone_id as u64);
+
+        let enter_zone = EnterZone::new_default(instance_id, zone_id, "Copacabana Beta");
+
+        tracing::info!(
+            "Enviando EnterZone: zone_id={}, instance=0x{:016X}, zone_name='{}' para socket 0x{:08X}",
+            zone_id,
+            instance_id,
+            enter_zone.zone_name,
+            socket_id
+        );
+
+        // Atualizar zona na sessao
+        self.sessions.set_zone(socket_id, zone_id).await;
+
+        let msg_data = enter_zone.serialize();
+        self.send_reliable(addr, socket_id, MSG_ENTER_ZONE, &msg_data).await
+    }
+
+    // ==================== Fase 3: Time Sync ====================
+
+    /// Processa TimeSyncRequest do client e responde com TimeSyncResponse
+    async fn handle_time_sync(
+        &self,
+        addr: SocketAddr,
+        socket_id: u32,
+        msg_data: &[u8],
+    ) -> anyhow::Result<()> {
+        let request = match TimeSyncRequest::parse(msg_data) {
+            Some(r) => r,
+            None => {
+                tracing::warn!(
+                    "TimeSyncRequest malformado: {} bytes de socket 0x{:08X}",
+                    msg_data.len(),
+                    socket_id
+                );
+                return Ok(());
+            }
+        };
+
+        // ServerTime em microsegundos UNIX epoch (confirmado AeroMessages)
+        let server_time_us = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+
+        tracing::debug!(
+            "TimeSync: client_time={}, server_time={} para socket 0x{:08X}",
+            request.client_time,
+            server_time_us,
+            socket_id
+        );
+
+        let response = TimeSyncResponse {
+            client_time: request.client_time, // Echo do client time (vem primeiro)
+            server_time: server_time_us,       // Server time UNIX epoch micros
+        };
+
+        let resp_data = response.serialize();
+        // TimeSyncResponse usa message ID 5 (nao 4 como o Request)
+        self.send_control(addr, socket_id, CTRL_TIME_SYNC_RESPONSE, &resp_data).await
+    }
+
+    // ==================== Fase 4: ACKs ====================
+
+    /// Envia MatrixAck (canal 0, msg_id 2) confirmando recebimento de pacote reliable
+    async fn send_matrix_ack(
+        &self,
+        addr: SocketAddr,
+        socket_id: u32,
+        received_seq: u16,
+    ) -> anyhow::Result<()> {
+        let ack = MatrixAck {
+            next_seq_num: received_seq.wrapping_add(1),
+            ack_for_num: received_seq,
+        };
+
+        tracing::debug!(
+            "Enviando MatrixAck: next_seq={}, ack_for={} para socket 0x{:08X}",
+            ack.next_seq_num,
+            ack.ack_for_num,
+            socket_id
+        );
+
+        let ack_data = ack.serialize();
+        self.send_control(addr, socket_id, CTRL_MATRIX_ACK, &ack_data).await
+    }
+
+    /// Envia GssAck (canal 0, msg_id 3) confirmando recebimento de pacote GSS reliable
+    async fn send_gss_ack(
+        &self,
+        addr: SocketAddr,
+        socket_id: u32,
+        received_seq: u16,
+    ) -> anyhow::Result<()> {
+        let ack = messages::GssAck {
+            next_seq_num: received_seq.wrapping_add(1),
+            ack_for_num: received_seq,
+        };
+
+        tracing::debug!(
+            "Enviando GssAck: next_seq={}, ack_for={} para socket 0x{:08X}",
+            ack.next_seq_num,
+            ack.ack_for_num,
+            socket_id
+        );
+
+        let ack_data = ack.serialize();
+        self.send_control(addr, socket_id, CTRL_GSS_ACK, &ack_data).await
+    }
+
+    // ==================== Envio de Pacotes ====================
+
+    /// Envia um pacote de controle (canal 0) para o client
+    /// Formato: [uint8 message_id] [data...]
+    async fn send_control(
+        &self,
+        addr: SocketAddr,
+        socket_id: u32,
+        message_id: u8,
+        data: &[u8],
+    ) -> anyhow::Result<()> {
+        let payload = messages::build_control_payload(message_id, data);
+        let packet = ServerPacket::Data {
+            socket_id,
+            channel: 0,
+            payload,
+        };
+        self.send_packet(&packet, addr).await?;
+        self.sessions.mark_sent(socket_id).await;
+        Ok(())
+    }
+
+    /// Envia um pacote reliable (canal 1) com numero de sequencia
+    /// Formato: [uint16 seq_num] [uint8 message_id] [data...]
+    async fn send_reliable(
+        &self,
+        addr: SocketAddr,
+        socket_id: u32,
+        message_id: u8,
+        data: &[u8],
+    ) -> anyhow::Result<()> {
+        let seq = match self.sessions.next_send_seq(socket_id).await {
+            Some(s) => s,
+            None => {
+                tracing::error!(
+                    "Sessao 0x{:08X} nao encontrada para envio reliable",
+                    socket_id
+                );
+                return Ok(());
+            }
+        };
+
+        tracing::info!(
+            "Enviando reliable: seq={}, msg_id=0x{:02X}, data_len={} para socket 0x{:08X}",
+            seq,
+            message_id,
+            data.len(),
+            socket_id
+        );
+
+        let payload = messages::build_reliable_payload(seq, message_id, data);
+        let packet = ServerPacket::Data {
+            socket_id,
+            channel: 1,
+            payload,
+        };
+        self.send_packet(&packet, addr).await?;
+        self.sessions.mark_sent(socket_id).await;
         Ok(())
     }
 

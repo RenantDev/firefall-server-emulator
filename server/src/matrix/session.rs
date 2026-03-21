@@ -41,6 +41,22 @@ pub struct ClientSession {
     pub packets_received: u64,
     /// Contador de pacotes enviados
     pub packets_sent: u64,
+
+    // === Campos de sequencia (Fase 1) ===
+
+    /// Proximo numero de sequencia a enviar (reliable channel)
+    pub send_seq: u16,
+    /// Proximo numero de sequencia esperado do client
+    pub recv_seq: u16,
+
+    // === Campos de gameplay (Fase 2) ===
+
+    /// GUID do personagem (definido apos Login)
+    pub character_guid: u64,
+    /// ID da zona atual (definido apos EnterZone)
+    pub zone_id: u32,
+    /// Se o login ja foi processado
+    pub login_received: bool,
 }
 
 impl ClientSession {
@@ -56,6 +72,11 @@ impl ClientSession {
             created_at: now,
             packets_received: 1, // contando o POKE
             packets_sent: 1,     // contando o HEHE
+            send_seq: 0,
+            recv_seq: 0,
+            character_guid: 0,
+            zone_id: 0,
+            login_received: false,
         }
     }
 
@@ -172,6 +193,50 @@ impl SessionManager {
     pub async fn mark_sent(&self, socket_id: u32) {
         if let Some(session) = self.sessions_by_id.write().await.get_mut(&socket_id) {
             session.mark_sent();
+        }
+    }
+
+    /// Incrementa e retorna o proximo send_seq para enviar pacote reliable
+    pub async fn next_send_seq(&self, socket_id: u32) -> Option<u16> {
+        if let Some(session) = self.sessions_by_id.write().await.get_mut(&socket_id) {
+            let seq = session.send_seq;
+            session.send_seq = session.send_seq.wrapping_add(1);
+            Some(seq)
+        } else {
+            None
+        }
+    }
+
+    /// Atualiza recv_seq apos receber pacote reliable do client
+    pub async fn update_recv_seq(&self, socket_id: u32, received_seq: u16) {
+        if let Some(session) = self.sessions_by_id.write().await.get_mut(&socket_id) {
+            // Aceitar o proximo na sequencia, ou qualquer seq se for o primeiro
+            session.recv_seq = received_seq.wrapping_add(1);
+        }
+    }
+
+    /// Marca que o login foi recebido e define character_guid
+    pub async fn set_login_data(&self, socket_id: u32, character_guid: u64) {
+        if let Some(session) = self.sessions_by_id.write().await.get_mut(&socket_id) {
+            session.character_guid = character_guid;
+            session.login_received = true;
+            tracing::info!(
+                "Sessao 0x{:08X}: login recebido, character_guid=0x{:016X}",
+                socket_id,
+                character_guid
+            );
+        }
+    }
+
+    /// Define a zona atual do jogador
+    pub async fn set_zone(&self, socket_id: u32, zone_id: u32) {
+        if let Some(session) = self.sessions_by_id.write().await.get_mut(&socket_id) {
+            session.zone_id = zone_id;
+            tracing::info!(
+                "Sessao 0x{:08X}: entrou na zona {}",
+                socket_id,
+                zone_id
+            );
         }
     }
 

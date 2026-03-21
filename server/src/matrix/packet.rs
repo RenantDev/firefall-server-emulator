@@ -80,6 +80,12 @@ pub enum ServerPacket {
     Abort {
         socket_id: u32,
     },
+    /// Pacote de dados pos-handshake (enviado pelo servidor)
+    Data {
+        socket_id: u32,
+        channel: u8,
+        payload: Vec<u8>,
+    },
 }
 
 // ==================== Parsing de Pacotes ====================
@@ -284,6 +290,33 @@ pub fn serialize_server_packet(packet: &ServerPacket) -> Vec<u8> {
             tracing::info!("ABRT enviado: socket_id=0x{:08X}", socket_id);
             buf.to_vec()
         }
+
+        ServerPacket::Data {
+            socket_id,
+            channel,
+            payload,
+        } => {
+            // Pacote de dados: [uint32 SocketID] [uint16 Header] [payload...]
+            // Header bits: [15-14 Canal] [13-12 Resend=0] [11 Split=0] [10-0 PayloadLen]
+            let payload_len = payload.len().min(0x07FF) as u16; // max 2047 bytes
+            let header: u16 = ((*channel as u16 & 0x03) << 14) | payload_len;
+
+            let mut buf = BytesMut::with_capacity(6 + payload.len());
+            buf.put_u32(*socket_id);
+            buf.put_u16(header);
+            buf.put_slice(payload);
+
+            tracing::debug!(
+                "Data enviado: socket=0x{:08X}, canal={}, header=0x{:04X}, payload={}B",
+                socket_id,
+                channel,
+                header,
+                payload.len()
+            );
+            let bytes = buf.to_vec();
+            log_hex_dump("DATA ->", &bytes);
+            bytes
+        }
     }
 }
 
@@ -438,5 +471,36 @@ mod tests {
             ClientPacket::Unknown { .. } => {} // ok
             other => panic!("Esperado Unknown, recebido: {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_serialize_data_packet() {
+        let packet = ServerPacket::Data {
+            socket_id: 0x00000001,
+            channel: 0, // canal de controle
+            payload: vec![0x02, 0x00, 0x01, 0x00, 0x00],
+        };
+        let bytes = serialize_server_packet(&packet);
+        // [uint32 socket_id=1] [uint16 header] [payload]
+        assert_eq!(&bytes[0..4], &[0x00, 0x00, 0x00, 0x01]);
+        // Header: canal=0 (bits 15-14 = 00), resend=0, split=0, len=5
+        // Header = 0b00_00_0_00000000101 = 0x0005
+        assert_eq!(&bytes[4..6], &[0x00, 0x05]);
+        assert_eq!(&bytes[6..], &[0x02, 0x00, 0x01, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_serialize_data_packet_channel1() {
+        let packet = ServerPacket::Data {
+            socket_id: 0xAABBCCDD,
+            channel: 1, // canal reliable
+            payload: vec![0x00, 0x00, 0x01, 0xDE, 0xAD],
+        };
+        let bytes = serialize_server_packet(&packet);
+        assert_eq!(&bytes[0..4], &[0xAA, 0xBB, 0xCC, 0xDD]);
+        // Header: canal=1 (bits 15-14 = 01), resend=0, split=0, len=5
+        // Header = 0b01_00_0_00000000101 = 0x4005
+        assert_eq!(&bytes[4..6], &[0x40, 0x05]);
+        assert_eq!(&bytes[6..], &[0x00, 0x00, 0x01, 0xDE, 0xAD]);
     }
 }
