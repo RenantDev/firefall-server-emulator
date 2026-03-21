@@ -185,18 +185,18 @@ pub struct LoginMessage {
 }
 
 impl LoginMessage {
-    /// Helper para ler AeroString (ushort LE length prefix + UTF8 bytes)
-    fn read_aero_string(buf: &mut &[u8]) -> Option<String> {
-        if buf.len() < 2 {
-            return None;
+    /// Helper para ler AeroString null-terminated (le ate encontrar 0x00)
+    fn read_aero_string_nt(buf: &mut &[u8]) -> Option<String> {
+        if let Some(pos) = buf.iter().position(|&b| b == 0x00) {
+            let s = String::from_utf8_lossy(&buf[..pos]).to_string();
+            buf.advance(pos + 1); // pular o null terminator
+            Some(s)
+        } else {
+            // Sem null terminator, ler tudo
+            let s = String::from_utf8_lossy(buf).to_string();
+            *buf = &[];
+            Some(s)
         }
-        let len = buf.get_u16_le() as usize;
-        if buf.len() < len {
-            return None;
-        }
-        let s = String::from_utf8_lossy(&buf[..len]).to_string();
-        buf.advance(len);
-        Some(s)
     }
 
     /// Parseia mensagem Login do payload (apos seq + msg_id)
@@ -214,8 +214,8 @@ impl LoginMessage {
         let character_is_dev = buf.get_u8();
         let client_version = buf.get_u32_le();
 
-        // AeroString Unk2
-        let unk2 = Self::read_aero_string(&mut buf).unwrap_or_default();
+        // AeroString Unk2 (null-terminated)
+        let unk2 = Self::read_aero_string_nt(&mut buf).unwrap_or_default();
 
         // uint64 CharacterGuid
         let character_guid = if buf.len() >= 8 {
@@ -273,99 +273,79 @@ impl WelcomeToTheMatrix {
 
 /// EnterZone - servidor informa o client para entrar numa zona
 /// Enviada no canal 1 (reliable) apos WelcomeToTheMatrix
-/// Formato confirmado AeroMessages/PIN - struct complexo com sub-structs
+/// Formato confirmado AeroMessages/PIN:
+/// - AeroString sem argumento = null-terminated (NAO length-prefixed!)
+/// - GameClockInfoData.Timescale = f64 (double), Unk3/Unk4 = u64
 #[derive(Debug, Clone)]
 pub struct EnterZone {
-    /// ID da instancia (uint64)
     pub instance_id: u64,
-    /// ID da zona (uint32)
     pub zone_id: u32,
-    /// Timestamp da zona (int64, microsegundos UNIX epoch)
     pub zone_timestamp: i64,
-    /// Flags da zona: ZonePreview=1, DataPreview=2, AssetPreview=4
     pub zone_flags: u8,
-    /// Dono da zona (AeroString: ushort len + UTF8)
-    pub zone_owner: String,
-    /// Streaming protocol (ushort)
+    pub zone_owner: String,       // AeroString null-terminated
     pub streaming_protocol: u16,
-    /// SVN revision (uint32)
     pub svn_revision: u32,
-    /// Hotfix level (byte)
     pub hotfix_level: u8,
-    /// Match ID (uint64)
     pub match_id: u64,
-    /// Unk2 (sbyte)
     pub unk2: i8,
-    /// Simulation seed ms (uint32)
     pub simulation_seed_ms: u32,
-    /// Nome da zona (AeroString)
-    pub zone_name: String,
-    /// Se tem DevZoneInfo (byte)
+    pub zone_name: String,        // AeroString null-terminated
     pub have_dev_zone_info: bool,
-    // ZoneTimeSyncData
-    /// Fiction date time offset micros (int64)
+    // ZoneTimeSyncData (inline)
     pub fiction_datetime_offset_micros: i64,
-    /// Day length factor (float, default 12.0)
     pub day_length_factor: f32,
-    /// Day phase offset (float)
     pub day_phase_offset: f32,
-    // GameClockInfoData
-    /// MicroUnix 1 (int64)
-    pub game_clock_micro_1: i64,
-    /// MicroUnix 2 (int64)
-    pub game_clock_micro_2: i64,
-    /// Timescale (float)
-    pub game_clock_timescale: f32,
-    /// GameClock unk1 (uint32)
-    pub game_clock_unk1: u32,
-    /// GameClock unk2 (uint32)
-    pub game_clock_unk2: u32,
-    /// Paused (byte)
+    // GameClockInfoData (inline) - tipos confirmados por MatrixShared.cs
+    pub game_clock_micro_1: u64,  // ulong
+    pub game_clock_micro_2: u64,  // ulong
+    pub game_clock_timescale: f64, // DOUBLE (f64), nao float!
+    pub game_clock_unk3: u64,     // ulong, nao u32!
+    pub game_clock_unk4: u64,     // ulong, nao u32!
     pub game_clock_paused: bool,
-    /// Spectator mode flag (sbyte)
+    // Final
     pub spectator_mode_flag: i8,
 }
 
 impl EnterZone {
-    /// Cria um EnterZone com valores padrao para MVP
+    /// Cria um EnterZone com valores de referencia do PIN project
     pub fn new_default(instance_id: u64, zone_id: u32, zone_name: &str) -> Self {
         let now_micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_micros() as i64;
+            .as_micros() as u64;
 
         Self {
             instance_id,
             zone_id,
-            zone_timestamp: now_micros,
+            zone_timestamp: now_micros as i64,
             zone_flags: 0,
-            zone_owner: String::new(),
-            streaming_protocol: 0x4C5F, // mesmo do KISS
-            svn_revision: 1962,
+            zone_owner: "r5_exec".to_string(), // PIN usa "r5_exec"
+            streaming_protocol: 0x4C5F,
+            svn_revision: 0x0C9F5,             // PIN usa 51701
             hotfix_level: 0,
             match_id: 0,
             unk2: 0,
-            simulation_seed_ms: 0,
+            simulation_seed_ms: 0x63E2DB5E,    // PIN usa este valor
             zone_name: zone_name.to_string(),
             have_dev_zone_info: false,
             fiction_datetime_offset_micros: 0,
             day_length_factor: 12.0,
-            day_phase_offset: 0.0,
+            day_phase_offset: 0.896445870399,  // PIN usa este valor
             game_clock_micro_1: now_micros,
             game_clock_micro_2: now_micros,
             game_clock_timescale: 1.0,
-            game_clock_unk1: 0,
-            game_clock_unk2: 0,
+            game_clock_unk3: 0,
+            game_clock_unk4: 0,
             game_clock_paused: false,
             spectator_mode_flag: 0,
         }
     }
 
-    /// Serializa helper para AeroString (ushort LE length prefix + UTF8 bytes)
-    fn write_aero_string(buf: &mut BytesMut, s: &str) {
-        let bytes = s.as_bytes();
-        buf.put_u16_le(bytes.len() as u16);
-        buf.put_slice(bytes);
+    /// Escreve AeroString null-terminated (UTF8 bytes + 0x00)
+    /// AeroString sem argumento de tipo = null-terminated (confirmado Aero source)
+    fn write_aero_string_nt(buf: &mut BytesMut, s: &str) {
+        buf.put_slice(s.as_bytes());
+        buf.put_u8(0x00); // null terminator
     }
 
     pub fn serialize(&self) -> Vec<u8> {
@@ -376,29 +356,30 @@ impl EnterZone {
         buf.put_u32_le(self.zone_id);
         buf.put_i64_le(self.zone_timestamp);
         buf.put_u8(self.zone_flags);
-        Self::write_aero_string(&mut buf, &self.zone_owner);
+        Self::write_aero_string_nt(&mut buf, &self.zone_owner);
         buf.put_u16_le(self.streaming_protocol);
         buf.put_u32_le(self.svn_revision);
         buf.put_u8(self.hotfix_level);
         buf.put_u64_le(self.match_id);
         buf.put_i8(self.unk2);
         buf.put_u32_le(self.simulation_seed_ms);
-        Self::write_aero_string(&mut buf, &self.zone_name);
+        Self::write_aero_string_nt(&mut buf, &self.zone_name);
 
-        // DevZoneInfo flag (0 = sem dev zone info)
+        // DevZoneInfo flag
         buf.put_u8(if self.have_dev_zone_info { 1 } else { 0 });
 
-        // ZoneTimeSyncData (sempre presente)
+        // ZoneTimeSyncData (inline, sem prefix)
         buf.put_i64_le(self.fiction_datetime_offset_micros);
         buf.put_f32_le(self.day_length_factor);
         buf.put_f32_le(self.day_phase_offset);
 
-        // GameClockInfoData (sempre presente)
-        buf.put_i64_le(self.game_clock_micro_1);
-        buf.put_i64_le(self.game_clock_micro_2);
-        buf.put_f32_le(self.game_clock_timescale);
-        buf.put_u32_le(self.game_clock_unk1);
-        buf.put_u32_le(self.game_clock_unk2);
+        // GameClockInfoData (inline, sem prefix)
+        // Tipos confirmados por MatrixShared.cs: ulong, ulong, double, ulong, ulong, byte
+        buf.put_u64_le(self.game_clock_micro_1);
+        buf.put_u64_le(self.game_clock_micro_2);
+        buf.put_f64_le(self.game_clock_timescale); // DOUBLE (f64)!
+        buf.put_u64_le(self.game_clock_unk3);      // u64!
+        buf.put_u64_le(self.game_clock_unk4);      // u64!
         buf.put_u8(if self.game_clock_paused { 1 } else { 0 });
 
         // SpectatorModeFlag
@@ -532,15 +513,13 @@ mod tests {
     fn test_enter_zone_serialize() {
         let msg = EnterZone::new_default(0x100000001, 1, "TestZone");
         let bytes = msg.serialize();
-        // Deve ter pelo menos os campos obrigatorios
-        assert!(bytes.len() > 50, "EnterZone deve ter >50 bytes, tem {}", bytes.len());
+        // Com GameClockInfoData usando f64+u64+u64, deve ter ~124 bytes
+        assert!(bytes.len() > 100, "EnterZone deve ter >100 bytes, tem {}", bytes.len());
 
-        // Verificar primeiros campos (Little Endian para dados de mensagem)
+        // Verificar primeiros campos (Little Endian)
         let mut buf = &bytes[..];
-        let instance_id = buf.get_u64_le();
-        assert_eq!(instance_id, 0x100000001);
-        let zone_id = buf.get_u32_le();
-        assert_eq!(zone_id, 1);
+        assert_eq!(buf.get_u64_le(), 0x100000001); // instance_id
+        assert_eq!(buf.get_u32_le(), 1);            // zone_id
     }
 
     #[test]
@@ -577,11 +556,11 @@ mod tests {
 
     #[test]
     fn test_login_message_parse_minimal() {
-        // Formato: [u8 isDev] [u32 LE version] [u16 LE str_len] [str bytes] [u64 LE guid]
+        // Formato: [u8 isDev] [u32 LE version] [null-terminated string] [u64 LE guid]
         let mut data = BytesMut::with_capacity(32);
         data.put_u8(0); // isDev
         data.put_u32_le(1962); // version (Little Endian)
-        data.put_u16_le(0); // AeroString unk2 vazia (len=0)
+        data.put_u8(0x00); // AeroString unk2 vazia (null terminator)
         data.put_u64_le(0xABCD_EF01_2345_6789); // guid (Little Endian)
 
         let msg = LoginMessage::parse(&data).unwrap();
