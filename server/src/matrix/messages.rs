@@ -257,7 +257,7 @@ impl WelcomeToTheMatrix {
     pub fn serialize(&self) -> Vec<u8> {
         // uint64 PlayerID + ushort len1 + data1 + ushort len2 + data2
         let mut buf = BytesMut::with_capacity(12 + self.unk1.len() + self.unk2.len());
-        buf.put_u64(self.player_id);
+        buf.put_u64_le(self.player_id); // LE para dados de mensagem
         // AeroArray com length prefix ushort (Little Endian para dados de mensagem)
         buf.put_u16_le(self.unk1.len() as u16);
         if !self.unk1.is_empty() {
@@ -523,7 +523,7 @@ mod tests {
         assert_eq!(bytes.len(), 12);
 
         let mut buf = &bytes[..];
-        assert_eq!(buf.get_u64(), 0xDEADBEEF_12345678); // PlayerID (BE no wire)
+        assert_eq!(buf.get_u64_le(), 0xDEADBEEF_12345678); // PlayerID (LE para dados de msg)
         assert_eq!(buf.get_u16_le(), 0); // unk1 length = 0
         assert_eq!(buf.get_u16_le(), 0); // unk2 length = 0
     }

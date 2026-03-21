@@ -72,7 +72,7 @@ impl ClientSession {
             created_at: now,
             packets_received: 1, // contando o POKE
             packets_sent: 1,     // contando o HEHE
-            send_seq: 0,
+            send_seq: 1, // Comeca em 1 (corresponde ao seq_start no HUGG)
             recv_seq: 0,
             character_guid: 0,
             zone_id: 0,
