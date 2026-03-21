@@ -28,7 +28,10 @@ use super::session::{HandshakeState, SessionManager};
 const MAX_PACKET_SIZE: usize = 2048;
 
 /// Porta padrao do game server (informada no HUGG)
-const DEFAULT_GAME_PORT: u16 = 25001;
+/// No Firefall original, handshake e game data eram portas separadas (25000/25001).
+/// No emulador, usamos a MESMA porta para tudo. O HUGG informa a porta publica
+/// (MATRIX_PUBLIC_PORT via playit.gg tunnel) para que o client envie dados de volta.
+const DEFAULT_GAME_PORT: u16 = 25000;
 
 /// Intervalo de limpeza de sessoes expiradas (em segundos)
 const CLEANUP_INTERVAL_SECS: u64 = 30;
@@ -47,19 +50,21 @@ pub struct MatrixServer {
 
 impl MatrixServer {
     /// Cria e inicia o Matrix server na porta especificada
-    pub async fn bind(port: u16) -> anyhow::Result<Self> {
+    /// game_port: porta que o HUGG informa ao client para enviar dados de jogo
+    ///   (pode ser diferente da porta de bind se usando tunnel/NAT)
+    pub async fn bind(port: u16, game_port: u16) -> anyhow::Result<Self> {
         let bind_addr = format!("0.0.0.0:{}", port);
         let socket = UdpSocket::bind(&bind_addr).await?;
         tracing::info!(
-            "Matrix UDP server escutando em {} (game port: {})",
+            "Matrix UDP server escutando em {} (game port no HUGG: {})",
             bind_addr,
-            DEFAULT_GAME_PORT
+            game_port
         );
 
         Ok(Self {
             socket: Arc::new(socket),
             sessions: SessionManager::new(),
-            game_port: DEFAULT_GAME_PORT,
+            game_port,
             start_time: Instant::now(),
         })
     }
@@ -905,10 +910,12 @@ impl MatrixServer {
 }
 
 /// Ponto de entrada: inicia o Matrix server como task async
-pub async fn start(port: u16) {
-    tracing::info!("=== Iniciando Matrix UDP Game Server na porta {} ===", port);
+/// port: porta local para bind UDP
+/// game_port: porta informada no HUGG (pode ser diferente se usando tunnel)
+pub async fn start(port: u16, game_port: u16) {
+    tracing::info!("=== Iniciando Matrix UDP Game Server na porta {} (HUGG game_port={}) ===", port, game_port);
 
-    match MatrixServer::bind(port).await {
+    match MatrixServer::bind(port, game_port).await {
         Ok(server) => {
             if let Err(e) = server.run().await {
                 tracing::error!("Matrix server encerrado com erro: {:?}", e);

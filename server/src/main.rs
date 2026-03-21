@@ -55,7 +55,13 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "25000".into())
         .parse()
         .unwrap_or(25000);
-    tokio::spawn(matrix::server::start(matrix_port));
+    // MATRIX_PUBLIC_PORT: porta publica que o HUGG informa ao client (playit.gg tunnel)
+    // Fallback: mesma porta do bind (para uso local sem tunnel)
+    let matrix_game_port: u16 = std::env::var("MATRIX_PUBLIC_PORT")
+        .unwrap_or_else(|_| matrix_port.to_string())
+        .parse()
+        .unwrap_or(matrix_port);
+    tokio::spawn(matrix::server::start(matrix_port, matrix_game_port));
 
     tracing::info!("Firefall server listening on {bind_addr} (HTTP)");
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
