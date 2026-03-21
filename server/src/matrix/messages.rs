@@ -133,8 +133,9 @@ impl TimeSyncRequest {
             return None;
         }
         let mut buf = &data[..];
+        // Dados de mensagem usam Little Endian (confirmado AeroMessages)
         Some(Self {
-            client_time: buf.get_u64(),
+            client_time: buf.get_u64_le(),
         })
     }
 }
@@ -153,8 +154,9 @@ pub struct TimeSyncResponse {
 impl TimeSyncResponse {
     pub fn serialize(&self) -> Vec<u8> {
         let mut buf = BytesMut::with_capacity(16);
-        buf.put_u64(self.client_time); // ClientTime primeiro (confirmado AeroMessages)
-        buf.put_u64(self.server_time); // ServerTime segundo
+        // Dados de mensagem usam Little Endian (confirmado AeroMessages)
+        buf.put_u64_le(self.client_time); // ClientTime primeiro
+        buf.put_u64_le(self.server_time); // ServerTime segundo
         buf.to_vec()
     }
 }
@@ -496,15 +498,15 @@ mod tests {
         assert_eq!(bytes.len(), 16);
 
         let mut buf = &bytes[..];
-        // ClientTime vem primeiro (confirmado AeroMessages)
-        assert_eq!(buf.get_u64(), 987654321);
-        assert_eq!(buf.get_u64(), 123456789);
+        // Little Endian, ClientTime primeiro (confirmado AeroMessages)
+        assert_eq!(buf.get_u64_le(), 987654321);
+        assert_eq!(buf.get_u64_le(), 123456789);
     }
 
     #[test]
     fn test_time_sync_request_parse() {
         let mut data = BytesMut::with_capacity(8);
-        data.put_u64(555555555);
+        data.put_u64_le(555555555); // Little Endian
         let req = TimeSyncRequest::parse(&data).unwrap();
         assert_eq!(req.client_time, 555555555);
     }

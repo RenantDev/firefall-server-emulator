@@ -188,7 +188,10 @@ pub fn parse_client_packet(data: &[u8]) -> ClientPacket {
             let channel = ((header >> 14) & 0x03) as u8;
             let resend_count = ((header >> 12) & 0x03) as u8;
             let is_split = ((header >> 11) & 0x01) == 1;
-            let payload_len = (header & 0x07FF) as usize;
+            // O campo length (bits 10-0) conta bytes INCLUINDO os 2 bytes do header
+            // Payload real = length - 2
+            let raw_len = (header & 0x07FF) as usize;
+            let payload_len = if raw_len >= 2 { raw_len - 2 } else { 0 };
 
             let remaining = &header_and_payload[2..];
 
@@ -299,9 +302,10 @@ pub fn serialize_server_packet(packet: &ServerPacket) -> Vec<u8> {
             payload,
         } => {
             // Pacote de dados: [uint32 SocketID] [uint16 Header] [payload...]
-            // Header bits: [15-14 Canal] [13-12 Resend=0] [11 Split=0] [10-0 PayloadLen]
-            let payload_len = payload.len().min(0x07FF) as u16; // max 2047 bytes
-            let header: u16 = ((*channel as u16 & 0x03) << 14) | payload_len;
+            // Header bits: [15-14 Canal] [13-12 Resend=0] [11 Split=0] [10-0 Length]
+            // Length inclui os 2 bytes do header + payload
+            let frame_len = (payload.len() + 2).min(0x07FF) as u16;
+            let header: u16 = ((*channel as u16 & 0x03) << 14) | frame_len;
 
             let mut buf = BytesMut::with_capacity(6 + payload.len());
             buf.put_u32(*socket_id);
@@ -440,11 +444,12 @@ mod tests {
     #[test]
     fn test_parse_data_packet() {
         // Pacote de dados: socket_id=0x00000001, header com canal=1, payload de 3 bytes
-        // Header: canal=1 (bits 15-14 = 01), resend=0, split=0, len=3
-        // Header = 0b01_00_0_00000000011 = 0x4003
+        // Header length inclui os 2 bytes do header: 2 + 3 = 5
+        // Header: canal=1 (bits 15-14 = 01), resend=0, split=0, len=5
+        // Header = 0b01_00_0_00000000101 = 0x4005
         let data: Vec<u8> = vec![
             0x00, 0x00, 0x00, 0x01, // socket_id = 1
-            0x40, 0x03,             // header = 0x4003
+            0x40, 0x05,             // header = 0x4005 (length=5, includes header)
             0xAA, 0xBB, 0xCC,      // payload (3 bytes)
         ];
         match parse_client_packet(&data) {
@@ -484,9 +489,9 @@ mod tests {
         let bytes = serialize_server_packet(&packet);
         // [uint32 socket_id=1] [uint16 header] [payload]
         assert_eq!(&bytes[0..4], &[0x00, 0x00, 0x00, 0x01]);
-        // Header: canal=0 (bits 15-14 = 00), resend=0, split=0, len=5
-        // Header = 0b00_00_0_00000000101 = 0x0005
-        assert_eq!(&bytes[4..6], &[0x00, 0x05]);
+        // Header: canal=0, resend=0, split=0, length=5+2=7 (inclui header)
+        // Header = 0b00_00_0_00000000111 = 0x0007
+        assert_eq!(&bytes[4..6], &[0x00, 0x07]);
         assert_eq!(&bytes[6..], &[0x02, 0x00, 0x01, 0x00, 0x00]);
     }
 
@@ -499,9 +504,9 @@ mod tests {
         };
         let bytes = serialize_server_packet(&packet);
         assert_eq!(&bytes[0..4], &[0xAA, 0xBB, 0xCC, 0xDD]);
-        // Header: canal=1 (bits 15-14 = 01), resend=0, split=0, len=5
-        // Header = 0b01_00_0_00000000101 = 0x4005
-        assert_eq!(&bytes[4..6], &[0x40, 0x05]);
+        // Header: canal=1, resend=0, split=0, length=5+2=7 (inclui header)
+        // Header = 0b01_00_0_00000000111 = 0x4007
+        assert_eq!(&bytes[4..6], &[0x40, 0x07]);
         assert_eq!(&bytes[6..], &[0x00, 0x00, 0x01, 0xDE, 0xAD]);
     }
 }
