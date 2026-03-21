@@ -248,9 +248,10 @@ impl MatrixServer {
             .await;
 
         // Enviar HUGG para completar o handshake
+        // sequence_start=1 (confirmado pelo PIN project)
         let response = ServerPacket::Hugg {
             socket_id,
-            sequence_start: 0,
+            sequence_start: 1,
             game_server_port: self.game_port,
         };
         self.send_packet(&response, addr).await?;

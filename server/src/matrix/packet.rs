@@ -260,20 +260,21 @@ pub fn serialize_server_packet(packet: &ServerPacket) -> Vec<u8> {
         }
 
         ServerPacket::Hugg {
-            socket_id,
+            socket_id: _,
             sequence_start,
             game_server_port,
         } => {
-            // HUGG: [uint32 SocketID] [char[4] "HUGG"] [uint16 SequenceStart] [uint16 GameServerPort]
+            // HUGG: [uint32 0] [char[4] "HUGG"] [uint16 SequenceStart] [uint16 GameServerPort]
+            // O primeiro uint32 e SEMPRE 0 durante handshake (como HEHE)
+            // O client usa o socket_id atribuido no HEHE, nao precisa repetir aqui
             let mut buf = BytesMut::with_capacity(12);
-            buf.put_u32(*socket_id);
+            buf.put_u32(0x00000000); // sempre 0 no handshake
             buf.put_slice(&MAGIC_HUGG);
             buf.put_u16(*sequence_start);
             buf.put_u16(*game_server_port);
 
             tracing::info!(
-                "HUGG enviado: socket_id=0x{:08X}, seq_start={}, port={}",
-                socket_id,
+                "HUGG enviado: seq_start={}, port={}",
                 sequence_start,
                 game_server_port
             );
@@ -424,15 +425,15 @@ mod tests {
     #[test]
     fn test_serialize_hugg() {
         let packet = ServerPacket::Hugg {
-            socket_id: 0xAABBCCDD,
-            sequence_start: 0,
+            socket_id: 0xAABBCCDD, // ignorado, sempre envia 0
+            sequence_start: 1,
             game_server_port: 25001,
         };
         let bytes = serialize_server_packet(&packet);
         assert_eq!(bytes.len(), 12);
-        assert_eq!(&bytes[0..4], &[0xAA, 0xBB, 0xCC, 0xDD]); // socket_id
+        assert_eq!(&bytes[0..4], &[0x00, 0x00, 0x00, 0x00]); // sempre 0 no handshake
         assert_eq!(&bytes[4..8], b"HUGG");
-        assert_eq!(&bytes[8..10], &[0x00, 0x00]); // sequence_start = 0
+        assert_eq!(&bytes[8..10], &[0x00, 0x01]); // sequence_start = 1
         assert_eq!(u16::from_be_bytes([bytes[10], bytes[11]]), 25001); // port
     }
 
