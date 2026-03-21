@@ -133,24 +133,25 @@ pub fn parse_client_packet(data: &[u8]) -> ClientPacket {
         }
 
         b"KISS" => {
-            // KISS: [uint32 SocketID] [char[4] "KISS"] [uint16 ProtocolVersion] [uint16 StreamingProtocol]
-            if buf.remaining() < 4 {
-                tracing::warn!("KISS recebido mas sem dados de protocolo (faltam bytes)");
+            // KISS: [uint32 0] [char[4] "KISS"] [uint32 AssignedSocketID] [uint16 StreamingProtocol]
+            // O primeiro uint32 (socket_id) e sempre 0 no KISS.
+            // O socket_id real (atribuido no HEHE) vem DENTRO do payload como uint32.
+            if buf.remaining() < 6 {
+                tracing::warn!("KISS recebido mas sem dados suficientes (faltam bytes, precisa 6)");
                 return ClientPacket::Unknown {
                     raw: data.to_vec(),
                 };
             }
-            let proto_ver = buf.get_u16();
+            let assigned_socket_id = buf.get_u32(); // socket_id do HEHE
             let streaming_proto = buf.get_u16();
             tracing::info!(
-                "KISS recebido: socket_id=0x{:08X}, proto_ver=0x{:04X}, streaming=0x{:04X}",
-                socket_id,
-                proto_ver,
+                "KISS recebido: assigned_socket_id=0x{:08X}, streaming=0x{:04X}",
+                assigned_socket_id,
                 streaming_proto
             );
             ClientPacket::Kiss {
-                socket_id,
-                protocol_version: proto_ver,
+                socket_id: assigned_socket_id,
+                protocol_version: 0, // nao enviado no KISS
                 streaming_protocol: streaming_proto,
             }
         }
@@ -374,21 +375,20 @@ mod tests {
 
     #[test]
     fn test_parse_kiss() {
-        // KISS: socket_id=0xDEADBEEF, magic="KISS", proto=0x4C5F, streaming=0x4C5F
+        // KISS: [uint32 0] [char[4] "KISS"] [uint32 AssignedSocketID=0x48] [uint16 StreamingProto=0x4C5F]
         let data: Vec<u8> = vec![
-            0xDE, 0xAD, 0xBE, 0xEF, // socket_id
+            0x00, 0x00, 0x00, 0x00, // socket_id = 0 (sempre 0 no KISS)
             0x4B, 0x49, 0x53, 0x53, // "KISS"
-            0x4C, 0x5F,             // protocol_version
-            0x4C, 0x5F,             // streaming_protocol
+            0x00, 0x00, 0x00, 0x48, // assigned_socket_id = 0x48
+            0x4C, 0x5F,             // streaming_protocol = 0x4C5F
         ];
         match parse_client_packet(&data) {
             ClientPacket::Kiss {
                 socket_id,
-                protocol_version,
+                protocol_version: _,
                 streaming_protocol,
             } => {
-                assert_eq!(socket_id, 0xDEADBEEF);
-                assert_eq!(protocol_version, STREAMING_PROTOCOL);
+                assert_eq!(socket_id, 0x48);
                 assert_eq!(streaming_protocol, STREAMING_PROTOCOL);
             }
             other => panic!("Esperado Kiss, recebido: {:?}", other),
