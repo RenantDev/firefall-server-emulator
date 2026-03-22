@@ -672,23 +672,23 @@ impl MatrixServer {
         };
         self.sessions.set_login_data(socket_id, char_guid).await;
 
-        // Enviar WelcomeToTheMatrix (Fase 2)
-        self.send_welcome_to_matrix(addr, socket_id, char_guid).await?;
+        // Converter char_guid para entity_id (byte 0 = 0x00, formato PIN)
+        let entity_id = gss::entity_id_from_guid(char_guid);
 
-        // Pequeno delay para dar tempo ao client processar o Welcome
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Enviar WelcomeToTheMatrix com entity_id (byte 0 = 0x00)
+        // PIN usa player_id com byte baixo = 0x00 (entity format)
+        self.send_welcome_to_matrix(addr, socket_id, entity_id).await?;
 
-        // Enviar EnterZone (Fase 2)
+        // Enviar EnterZone IMEDIATAMENTE apos WelcomeToTheMatrix (sem delay)
+        // PIN envia em sequencia imediata, sem esperar ACK
         let zone_id = 448; // New Eden (Coral Forest) - zona principal open world
         self.send_enter_zone(addr, socket_id, zone_id).await?;
 
-        // Esperar o client processar o EnterZone e enviar MatrixAck
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        // Enviar GSS keyframes. O client NAO envia EnterZoneAck como mensagem
-        // separada no canal 1. O MatrixAck do EnterZone no canal 0 serve como
-        // confirmacao. O proximo msg reliable do client sera ClientStatus.
-        self.handle_enter_zone_ack(addr, socket_id, &[]).await?;
+        // Aguardar EnterZoneAck real do client (msg_id=18 no canal 1)
+        // O client carrega a zona e envia EnterZoneAck quando pronto.
+        // Os keyframes serao enviados quando handle_enter_zone_ack for chamado
+        // pelo loop principal ao receber msg_id=18.
+        // Se o client NAO enviar EnterZoneAck em 30s, a sessao expira.
 
         Ok(())
     }
