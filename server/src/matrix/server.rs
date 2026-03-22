@@ -682,6 +682,14 @@ impl MatrixServer {
         let zone_id = 1; // Zona padrao (Copacabana/New Eden)
         self.send_enter_zone(addr, socket_id, zone_id).await?;
 
+        // Pequeno delay para dar tempo ao client processar o EnterZone
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Enviar GSS keyframes imediatamente apos EnterZone
+        // O client NAO envia EnterZoneAck antes de precisar dos keyframes,
+        // ele envia ClientStatus diretamente. Entao enviamos os keyframes aqui.
+        self.handle_enter_zone_ack(addr, socket_id, &[]).await?;
+
         Ok(())
     }
 
