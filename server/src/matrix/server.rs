@@ -884,7 +884,7 @@ impl MatrixServer {
         // Posicao de spawn padrao (New Eden / Copacabana)
         let spawn_pos: [f32; 3] = [297.0, 326.0, 434.0];
         let spawn_rot: [f32; 4] = [0.0, 0.0, 0.0, 1.0]; // identidade
-        let spawn_vel: [f32; 3] = [0.0, 0.0, 0.0];
+        let spawn_aim: [f32; 3] = [1.0, 0.0, 0.0]; // direcao de mira (forward)
 
         // Pequeno delay para garantir que o client processou o EnterZone
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -935,7 +935,7 @@ impl MatrixServer {
         let movement_data = gss::build_movement_view_keyframe(
             spawn_pos,
             spawn_rot,
-            spawn_vel,
+            spawn_aim,
             0x0010, // MovementState = Standing
         );
         tracing::info!(

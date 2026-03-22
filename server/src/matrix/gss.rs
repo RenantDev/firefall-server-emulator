@@ -71,184 +71,520 @@ pub fn entity_id_from_guid(character_guid: u64) -> u64 {
     character_guid & 0xFFFFFFFF_FFFFFF00
 }
 
-/// Constroi um BaseController Keyframe minimo (controller_id=2, msg_id=4)
+// ==================== Helpers para serializacao Aero ====================
+
+/// Escreve uma string null-terminated no buffer
+fn put_cstring(buf: &mut BytesMut, s: &str) {
+    buf.put_slice(s.as_bytes());
+    buf.put_u8(0x00);
+}
+
+/// Escreve o bloco StaticInfoData comum ao ObserverView e BaseController
+/// Contem nome, genero, raca, visuais e metadados do personagem
+fn put_static_info(buf: &mut BytesMut, character_name: &str, gender: u8, race: u8) {
+    // DisplayName: null-terminated string
+    put_cstring(buf, character_name);
+    // UniqueName: null-terminated string
+    put_cstring(buf, character_name);
+    // Gender: u8 (0=male, 1=female)
+    buf.put_u8(gender);
+    // Race: u8 (0=human)
+    buf.put_u8(race);
+    // CharInfoId: u32
+    buf.put_u32_le(0);
+    // HeadMain: u32
+    buf.put_u32_le(0);
+    // Eyes: u32
+    buf.put_u32_le(0);
+    // Unk_1: u8
+    buf.put_u8(0);
+    // TargetFlags: u8
+    buf.put_u8(0);
+    // StaffFlags: u8
+    buf.put_u8(0);
+    // CharacterTypeId: u32
+    buf.put_u32_le(0);
+    // VoiceSet: u32
+    buf.put_u32_le(0);
+    // TitleId: u16
+    buf.put_u16_le(0);
+    // NameLocalizationId: u32
+    buf.put_u32_le(0);
+    // HeadAccessories: byte-prefixed array (vazio)
+    buf.put_u8(0);
+    // LoadoutVehicle: u32
+    buf.put_u32_le(0);
+    // LoadoutGlider: u32
+    buf.put_u32_le(0);
+
+    // VisualsBlock - todos os arrays vazios (9 bytes)
+    buf.put_u8(0); // Decals count
+    buf.put_u8(0); // Gradients count
+    buf.put_u8(0); // Colors count
+    buf.put_u8(0); // Palettes count
+    buf.put_u8(0); // Patterns count
+    buf.put_u8(0); // OrnamentGroupIds count
+    buf.put_u8(0); // CziMapAssetIds count
+    buf.put_u8(0); // MorphWeights count
+    buf.put_u8(0); // Overlays count
+
+    // ArmyTag: null-terminated string vazia
+    put_cstring(buf, "");
+}
+
+/// Escreve o bloco CharacterSpawnPose
+fn put_spawn_pose(buf: &mut BytesMut, position: [f32; 3]) {
+    // Time: u32
+    buf.put_u32_le(0);
+    // Position: 3x f32
+    buf.put_f32_le(position[0]);
+    buf.put_f32_le(position[1]);
+    buf.put_f32_le(position[2]);
+    // Rotation: quaternion (identity)
+    buf.put_f32_le(0.0);
+    buf.put_f32_le(0.0);
+    buf.put_f32_le(0.0);
+    buf.put_f32_le(1.0);
+    // AimDirection: 3x f32 (forward)
+    buf.put_f32_le(1.0);
+    buf.put_f32_le(0.0);
+    buf.put_f32_le(0.0);
+    // Velocity: 3x f32 (parado)
+    buf.put_f32_le(0.0);
+    buf.put_f32_le(0.0);
+    buf.put_f32_le(0.0);
+    // MovementState: u16 (Standing)
+    buf.put_u16_le(0x0010);
+    // Unk1: u8
+    buf.put_u8(0);
+    // Unk2: u8
+    buf.put_u8(0);
+    // JetpackEnergy: u16
+    buf.put_u16_le(10000);
+    // AirGroundTimer: i16
+    buf.put_i16_le(0);
+    // JumpTimer: i16
+    buf.put_i16_le(0);
+    // HaveDebugData: u8
+    buf.put_u8(0);
+}
+
+/// Escreve o bloco CharacterStatsData (todos vazios)
+fn put_character_stats(buf: &mut BytesMut) {
+    // ItemAttributes count: u16
+    buf.put_u16_le(0);
+    // Unk1: u32
+    buf.put_u32_le(0);
+    // WeaponA count: u16
+    buf.put_u16_le(0);
+    // Unk2: u32
+    buf.put_u32_le(0);
+    // WeaponB count: u16
+    buf.put_u16_le(0);
+    // Unk3: u32
+    buf.put_u32_le(0);
+    // AttributeCategories1 count: u16
+    buf.put_u16_le(0);
+    // AttributeCategories2 count: u16
+    buf.put_u16_le(0);
+}
+
+// ==================== MovementView Keyframe ====================
+
+/// Constroi um MovementView Keyframe (controller_id=12, msg_id=3)
 ///
-/// Este e o keyframe mais complexo. Para MVP, enviamos dados minimos
-/// para que o client nao crashe. O formato baseia-se no AeroMessages.
+/// MovementView tem 0 campos nullable, portanto NAO tem bitfield prefix.
+/// Apenas 1 campo (MovementData) que e sempre serializado:
+///   Position (3x f32) + Rotation (4x f32) + Aim (3x f32) +
+///   MovementState (u16) + Time (u32) = 46 bytes total
+pub fn build_movement_view_keyframe(
+    position: [f32; 3],
+    rotation: [f32; 4],
+    aim_direction: [f32; 3],
+    movement_state: u16,
+) -> Vec<u8> {
+    let mut buf = BytesMut::with_capacity(46);
+
+    // SEM bitfield - MovementView tem 0 campos nullable
+
+    // Position: 3x f32 LE
+    buf.put_f32_le(position[0]);
+    buf.put_f32_le(position[1]);
+    buf.put_f32_le(position[2]);
+
+    // Rotation: quaternion 4x f32 LE
+    buf.put_f32_le(rotation[0]);
+    buf.put_f32_le(rotation[1]);
+    buf.put_f32_le(rotation[2]);
+    buf.put_f32_le(rotation[3]);
+
+    // AimDirection: 3x f32 LE
+    buf.put_f32_le(aim_direction[0]);
+    buf.put_f32_le(aim_direction[1]);
+    buf.put_f32_le(aim_direction[2]);
+
+    // MovementState: u16 LE (0x0010 = Standing)
+    buf.put_u16_le(movement_state);
+
+    // Time: u32 LE (0 = inicio)
+    buf.put_u32_le(0);
+
+    buf.to_vec()
+}
+
+// ==================== ObserverView Keyframe ====================
+
+/// Constroi um ObserverView Keyframe (controller_id=8, msg_id=3)
 ///
-/// Estrutura minima:
-/// - 8B player_guid LE (prefixo de controller keyframes)
-/// - Campos com nullable bitfields indicando quais campos estao presentes
+/// ObserverView tem 32 campos nullable = 4 bytes de bitfield.
+/// Estrategia MVP: todos os bits nullable = 0 (ausentes).
+/// Serializa apenas os campos non-nullable com valores default.
+pub fn build_observer_view_keyframe(
+    character_name: &str,
+    gender: u8,
+    race: u8,
+) -> Vec<u8> {
+    let mut buf = BytesMut::with_capacity(512);
+
+    // === 4 bytes de nullable bitfield (32 campos nullable, todos ausentes) ===
+    buf.put_u8(0x00);
+    buf.put_u8(0x00);
+    buf.put_u8(0x00);
+    buf.put_u8(0x00);
+
+    // === Campos non-nullable em ordem de declaracao ===
+
+    // 1. StaticInfo: StaticInfoData
+    put_static_info(&mut buf, character_name, gender, race);
+
+    // 2. SpawnTime: u32
+    buf.put_u32_le(0);
+
+    // 3. EffectsFlags: u8
+    buf.put_u8(0);
+
+    // 4. GibVisualsID: GibVisuals = {u32, u32}
+    buf.put_u32_le(0);
+    buf.put_u32_le(0);
+
+    // 5. ProcessDelay: {u16, u16}
+    buf.put_u16_le(0);
+    buf.put_u16_le(0);
+
+    // 6. CharacterState: {u8 state, u32 time}
+    buf.put_u8(6); // Living
+    buf.put_u32_le(0);
+
+    // 7. HostilityInfo: u8(0) - flags=0, sem campos condicionais
+    buf.put_u8(0);
+
+    // (NULLABLE 0: PersonalFactionStance - ausente)
+
+    // 8. CurrentHealthPct: u8
+    buf.put_u8(100);
+
+    // 9. MaxHealth: {i32 value, u32 time}
+    buf.put_i32_le(25000);
+    buf.put_u32_le(0);
+
+    // 10. EmoteID: EmoteData = {u32, f32}
+    buf.put_u32_le(0);
+    buf.put_f32_le(0.0);
+
+    // (NULLABLE 1: AttachedTo - ausente)
+
+    // 11. SnapMount: u8
+    buf.put_u8(0);
+
+    // 12. SinFlags: u8
+    buf.put_u8(0);
+
+    // (NULLABLE 2,3: ausentes)
+
+    // 13. ArmyGUID: u64
+    buf.put_u64_le(0);
+
+    // 14. OwnerId: u64
+    buf.put_u64_le(0);
+
+    // 15. NPCType: u16
+    buf.put_u16_le(0);
+
+    // 16. DockedParams: DockedParamsData = {u32, u8, u64}
+    buf.put_u32_le(0);
+    buf.put_u8(0);
+    buf.put_u64_le(0);
+
+    // (NULLABLE 4: LookAtTarget - ausente)
+
+    // 17. WaterLevelAndDesc: u8
+    buf.put_u8(0);
+
+    // (NULLABLE 5-8: ausentes)
+
+    // 18. SinCardType: u32
+    buf.put_u32_le(0);
+
+    // (NULLABLE 9-31: ausentes)
+
+    // 19. AssetOverrides: byte-prefixed array (vazio)
+    buf.put_u8(0);
+
+    buf.to_vec()
+}
+
+// ==================== BaseController Keyframe ====================
+
+/// Constroi um BaseController Keyframe (controller_id=2, msg_id=4)
 ///
-/// Para MVP ultra-minimo, tentamos enviar apenas o player_guid + bitfields zerados
-/// indicando "nenhum campo presente". Se o client crashar, iteramos.
+/// BaseController tem 38 campos nullable = 5 bytes de bitfield.
+/// Controller keyframes tem prefixo de 8 bytes com o player GUID.
+/// Estrategia MVP: todos os bits nullable = 0 (ausentes).
+/// Serializa TODOS os campos non-nullable com valores default.
 pub fn build_base_controller_keyframe(
     character_guid: u64,
     position: [f32; 3],
 ) -> Vec<u8> {
-    let mut buf = BytesMut::with_capacity(256);
+    let mut buf = BytesMut::with_capacity(1024);
 
-    // Prefixo: player_guid (8 bytes LE) - identifica o dono do controller
+    // === Prefixo: player_guid (8 bytes LE) ===
     buf.put_u64_le(character_guid);
 
-    // === Nullable bitfields ===
-    // O BaseController tem muitos campos opcionais controlados por bitfields.
-    // Cada grupo de ate 8 campos nullable tem 1 byte de bitfield.
-    // Bit = 1 significa "campo presente", bit = 0 significa "ausente/default".
-    //
-    // Para MVP, tentamos enviar os campos MINIMOS necessarios.
-    // Baseado na analise do PIN project e AeroMessages:
-    //
-    // Bitfield 1 (campos 0-7):
-    //   bit 0: CharacterState (NECESSARIO para nao crashar)
-    //   bit 1: HostilityInfo
-    //   bit 2: PersonalFactionStance
-    //   bit 3: CurrentHealth
-    //   bit 4: MaxHealth
-    //   bit 5: CurrentShields
-    //   bit 6: MaxShields
-    //   bit 7: HealthRegenDelay (ou EmoteID em versoes diferentes)
-    //
-    // Bitfield 2 (campos 8-15):
-    //   bit 0: SpawnTime / GibVisualsId
-    //   bit 1: SpawnPose
-    //   ... etc
-    //
-    // Tentativa: enviar CharacterState + CurrentHealth + MaxHealth + CurrentShields + MaxShields + SpawnPose
+    // === 5 bytes de nullable bitfield (38 campos nullable, todos ausentes) ===
+    buf.put_u8(0x00);
+    buf.put_u8(0x00);
+    buf.put_u8(0x00);
+    buf.put_u8(0x00);
+    buf.put_u8(0x00);
 
-    // Bitfield 1: bits 0,3,4,5,6 = CharacterState + Health/Shield values
-    buf.put_u8(0b0111_1001); // bits 0,3,4,5,6
+    // === Campos non-nullable em ordem de declaracao ===
 
-    // Bitfield 2: bit 1 = SpawnPose
-    buf.put_u8(0b0000_0010);
+    // 1. TimePlayed: i32
+    buf.put_i32_le(0);
 
-    // Bitfield 3: nenhum campo extra
-    buf.put_u8(0b0000_0000);
+    // 2. CurrentWeight: i32
+    buf.put_i32_le(0);
 
-    // === Campo 0: CharacterState ===
-    // CharacterState e um enum: 0=None, 2=Spawning, 4=PreSpawn, 6=Living, 8=Dead, etc
-    // Precisamos: state byte + time u32
-    buf.put_u8(6); // CharacterState = Living
-    buf.put_u32_le(0); // time = 0 (nao importa para MVP)
+    // 3. EncumberedWeight: i32
+    buf.put_i32_le(1000);
 
-    // === Campo 3: CurrentHealth ===
-    buf.put_u32_le(25000); // 25000 HP (valor tipico do Firefall)
+    // 4. AuthorizedTerminal: {u8, u32, u64}
+    buf.put_u8(0);
+    buf.put_u32_le(0);
+    buf.put_u64_le(0);
 
-    // === Campo 4: MaxHealth ===
-    buf.put_u32_le(25000);
+    // 5. PingTime: u32
+    buf.put_u32_le(0);
 
-    // === Campo 5: CurrentShields ===
-    buf.put_u32_le(12500); // shields
+    // 6. StaticInfo: StaticInfoData (mesmo formato do ObserverView)
+    put_static_info(&mut buf, "Player", 0, 0);
 
-    // === Campo 6: MaxShields ===
-    buf.put_u32_le(12500);
+    // 7. SpawnTime: u32
+    buf.put_u32_le(0);
 
-    // === Campo 9 (bitfield 2, bit 1): SpawnPose ===
-    // SpawnPose = posicao onde o personagem spawna
-    // Formato: 3x f32 (x, y, z) + 4x f32 (quaternion rotation)
-    buf.put_f32_le(position[0]); // x
-    buf.put_f32_le(position[1]); // y
-    buf.put_f32_le(position[2]); // z
-    // Quaternion (identity = sem rotacao)
-    buf.put_f32_le(0.0); // qx
-    buf.put_f32_le(0.0); // qy
-    buf.put_f32_le(0.0); // qz
-    buf.put_f32_le(1.0); // qw
+    // 8. VisualOverrides: byte-prefixed array (vazio)
+    buf.put_u8(0);
 
-    buf.to_vec()
-}
+    // 9. CurrentEquipment: EquipmentData (minimo/vazio)
+    //    Chassis SlottedItem (vazio): u32(0)
+    buf.put_u32_le(0);
+    //    Backpack SlottedItem (vazio): u32(0)
+    buf.put_u32_le(0);
+    //    PrimaryWeapon SlottedItem (vazio): u32(0)
+    buf.put_u32_le(0);
+    //    SecondaryWeapon SlottedItem (vazio): u32(0)
+    buf.put_u32_le(0);
+    //    EndUnk1: u32
+    buf.put_u32_le(0);
+    //    EndUnk2: u32
+    buf.put_u32_le(0);
 
-/// Constroi um ObserverView Keyframe minimo (controller_id=8, msg_id=3)
-///
-/// Contem informacoes visiveis: nome do personagem, genero, raca, visuais.
-/// Para MVP, enviamos o minimo para o client mostrar o personagem.
-///
-/// Baseado em AeroMessages/CharacterObserverView:
-/// - Tem nullable bitfields para campos opcionais
-/// - StaticInfo com nome, genero, raca
-pub fn build_observer_view_keyframe(
-    character_name: &str,
-    _gender: u8,
-    _race: u8,
-) -> Vec<u8> {
-    let mut buf = BytesMut::with_capacity(256);
+    // 10. SelectedLoadout: i32
+    buf.put_i32_le(0);
 
-    // === Nullable bitfields ===
-    // ObserverView campos:
-    //   bit 0: StaticInfo (nome, genero, raca, etc)
-    //   bit 1: DisplayName (pode ser diferente do nome real)
-    //   ... outros campos visuais
+    // 11. SelectedLoadoutIsPvP: u32
+    buf.put_u32_le(0);
 
-    // Bitfield 1: bit 0 = StaticInfo presente
-    buf.put_u8(0b0000_0001);
+    // 12. GibVisualsId: GibVisuals = {u32, u32}
+    buf.put_u32_le(0);
+    buf.put_u32_le(0);
 
-    // Bitfield 2: nenhum campo extra
-    buf.put_u8(0b0000_0000);
+    // 13. SpawnPose: CharacterSpawnPose
+    put_spawn_pose(&mut buf, position);
 
-    // === StaticInfo ===
-    // Formato baseado no AeroMessages CharacterStaticInfo:
-    // - AeroString name (null-terminated)
-    // - Campos adicionais variam por versao
+    // 14. ProcessDelay: {u16, u16}
+    buf.put_u16_le(0);
+    buf.put_u16_le(0);
 
-    // Nome do personagem (null-terminated)
-    buf.put_slice(character_name.as_bytes());
-    buf.put_u8(0x00); // null terminator
+    // 15. SpectatorMode: u8
+    buf.put_u8(0);
 
-    buf.to_vec()
-}
+    // (NULLABLE 0: CinematicCamera - ausente)
 
-/// Constroi um MovementView Keyframe minimo (controller_id=12, msg_id=3)
-///
-/// Contem posicao, rotacao, velocidade e estado de movimento.
-/// Este e o keyframe mais critico para o client renderizar o personagem.
-///
-/// Baseado em AeroMessages/CharacterMovementView:
-/// - Posicao: 3x f32
-/// - Rotacao: 4x f32 (quaternion)
-/// - Velocidade: 3x f32
-/// - MovementState: u16
-/// - Campos adicionais via nullable bitfields
-pub fn build_movement_view_keyframe(
-    position: [f32; 3],
-    rotation: [f32; 4],
-    velocity: [f32; 3],
-    movement_state: u16,
-) -> Vec<u8> {
-    let mut buf = BytesMut::with_capacity(128);
+    // 16. CharacterState: {u8 state=Living, u32 time=0}
+    buf.put_u8(6); // Living
+    buf.put_u32_le(0);
 
-    // === Nullable bitfields ===
-    // MovementView campos:
-    //   bit 0: Position + Rotation + Velocity (sempre presentes no keyframe)
-    //   bit 1: MovementState
-    //   bit 2: AimDirection
-    //   ... etc
+    // 17. HostilityInfo: u8(0) - flags=0, sem campos condicionais
+    buf.put_u8(0);
 
-    // Bitfield 1: bits 0,1 = posicao/rotacao e movementstate
-    buf.put_u8(0b0000_0011);
+    // (NULLABLE 1: PersonalFactionStance - ausente)
 
-    // Bitfield 2: nenhum campo extra
-    buf.put_u8(0b0000_0000);
+    // 18. CurrentHealth: i32
+    buf.put_i32_le(25000);
 
-    // === Campo 0: Posicao + Rotacao + Velocidade ===
-    // Posicao (3x f32 LE)
-    buf.put_f32_le(position[0]); // x
-    buf.put_f32_le(position[1]); // y
-    buf.put_f32_le(position[2]); // z
+    // 19. CurrentShields: i32
+    buf.put_i32_le(12500);
 
-    // Rotacao quaternion (4x f32 LE)
-    buf.put_f32_le(rotation[0]); // qx
-    buf.put_f32_le(rotation[1]); // qy
-    buf.put_f32_le(rotation[2]); // qz
-    buf.put_f32_le(rotation[3]); // qw
+    // 20. MaxShields: {i32, u32}
+    buf.put_i32_le(12500);
+    buf.put_u32_le(0);
 
-    // Velocidade (3x f32 LE)
-    buf.put_f32_le(velocity[0]); // vx
-    buf.put_f32_le(velocity[1]); // vy
-    buf.put_f32_le(velocity[2]); // vz
+    // 21. MaxHealth: {i32, u32}
+    buf.put_i32_le(25000);
+    buf.put_u32_le(0);
 
-    // === Campo 1: MovementState ===
-    // 0x0000 = Idle, 0x0010 = Standing, 0x0020 = Running, etc
-    buf.put_u16_le(movement_state);
+    // 22. CurrentDurabilityPct: u8
+    buf.put_u8(100);
+
+    // 23. EnergyParams: {f32 current, u32 time, f32 max, u32 time}
+    buf.put_f32_le(100.0);
+    buf.put_u32_le(0);
+    buf.put_f32_le(100.0);
+    buf.put_u32_le(0);
+
+    // 24. CharacterStats: todos vazios
+    put_character_stats(&mut buf);
+
+    // 25. EmoteID: {u32, f32}
+    buf.put_u32_le(0);
+    buf.put_f32_le(0.0);
+
+    // (NULLABLE 2: AttachedTo - ausente)
+
+    // 26. SnapMount: u8
+    buf.put_u8(0);
+
+    // 27. SinFlags: u8
+    buf.put_u8(0);
+
+    // 28. SinFlagsPrivate: u8
+    buf.put_u8(0);
+
+    // (NULLABLE 3,4: ausentes)
+
+    // 29. ArmyGUID: u64
+    buf.put_u64_le(0);
+
+    // 30. ArmyIsOfficer: i8
+    buf.put_i8(0);
+
+    // (NULLABLE 5: ausente)
+
+    // 31. DockedParams: {u32, u8, u64}
+    buf.put_u32_le(0);
+    buf.put_u8(0);
+    buf.put_u64_le(0);
+
+    // (NULLABLE 6: ausente)
+
+    // 32. ZoneUnlocks: u64
+    buf.put_u64_le(0);
+
+    // 33. RegionUnlocks: u64
+    buf.put_u64_le(0);
+
+    // 34. ChatPartyLeaderId: u64
+    buf.put_u64_le(0);
+
+    // 35. ScopeBubbleInfo: {u32, u32}
+    buf.put_u32_le(0);
+    buf.put_u32_le(0);
+
+    // (NULLABLE 7-11: ausentes)
+
+    // 36. ProgressionXp: u32
+    buf.put_u32_le(0);
+
+    // 37. PermanentStatusEffects: byte-prefixed array (vazio)
+    buf.put_u8(0);
+
+    // 38-57. 20x StatModifier: {u32 id, f32 value} = 8 bytes cada, 160 total
+    for _ in 0..20 {
+        buf.put_u32_le(0);
+        buf.put_f32_le(0.0);
+    }
+
+    // 58. Wallet: {u32, u32}
+    buf.put_u32_le(0);
+    buf.put_u32_le(0);
+
+    // 59. Loyalty: {u32, u32, u32}
+    buf.put_u32_le(0);
+    buf.put_u32_le(0);
+    buf.put_u32_le(0);
+
+    // 60. Level: u8
+    buf.put_u8(1);
+
+    // 61. EffectiveLevel: u8
+    buf.put_u8(1);
+
+    // 62. LevelResetCount: u8
+    buf.put_u8(0);
+
+    // 63. OldestDeployables: byte-prefixed array (vazio)
+    buf.put_u8(0);
+
+    // 64. PerkRespecs: u32
+    buf.put_u32_le(0);
+
+    // (NULLABLE 12,13: ausentes)
+
+    // 65. ChatMuteStatus: u8
+    buf.put_u8(0);
+
+    // 66. TimedDailyReward: {u8, u8, u8, u8, u32}
+    buf.put_u8(0);
+    buf.put_u8(0);
+    buf.put_u8(0);
+    buf.put_u8(0);
+    buf.put_u32_le(0);
+
+    // (NULLABLE 14: ausente)
+
+    // 67. SinCardType: u32
+    buf.put_u32_le(0);
+
+    // (NULLABLE 15-37: ausentes)
+
+    // 68. AssetOverrides: byte-prefixed array (vazio)
+    buf.put_u8(0);
+
+    // 69. FriendCount: u16
+    buf.put_u16_le(0);
+
+    // 70. CAISStatus: {u8, u32}
+    buf.put_u8(0);
+    buf.put_u32_le(0);
+
+    // 71. ScalingLevel: u32
+    buf.put_u32_le(0);
+
+    // 72. PvPRank: u32
+    buf.put_u32_le(0);
+
+    // 73. PvPRankPoints: u32
+    buf.put_u32_le(0);
+
+    // 74. PvPTokens: u32
+    buf.put_u32_le(0);
+
+    // 75. BountyPointsLastClaimed: u32
+    buf.put_u32_le(0);
+
+    // 76. EliteLevel: u32
+    buf.put_u32_le(0);
 
     buf.to_vec()
 }
@@ -312,35 +648,94 @@ mod tests {
     }
 
     #[test]
-    fn test_build_base_controller_keyframe_not_empty() {
-        let data = build_base_controller_keyframe(
-            0xFFFF000000000100,
-            [297.0, 326.0, 434.0],
-        );
-        assert!(!data.is_empty());
-        // Deve ter pelo menos o player_guid (8) + bitfields (3) + campos
-        assert!(data.len() > 8);
-    }
-
-    #[test]
-    fn test_build_observer_view_keyframe_not_empty() {
-        let data = build_observer_view_keyframe("TestPlayer", 1, 0);
-        assert!(!data.is_empty());
-        // Deve conter o nome null-terminated
-        assert!(data.windows(11).any(|w| w == b"TestPlayer\0"));
-    }
-
-    #[test]
-    fn test_build_movement_view_keyframe_not_empty() {
+    fn test_movement_view_keyframe_format() {
         let data = build_movement_view_keyframe(
             [297.0, 326.0, 434.0],
             [0.0, 0.0, 0.0, 1.0],
-            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
             0x0010,
         );
+
+        // MovementView: 0 campos nullable = SEM bitfield
+        // Position(12) + Rotation(16) + Aim(12) + MovementState(2) + Time(4) = 46 bytes
+        assert_eq!(data.len(), 46);
+
+        // Verificar posicao X no inicio (f32 LE)
+        let x = f32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        assert_eq!(x, 297.0);
+
+        // Verificar rotation W (offset 12+12=24, 4th float at offset 24)
+        let qw = f32::from_le_bytes([data[24], data[25], data[26], data[27]]);
+        assert_eq!(qw, 1.0);
+
+        // Verificar aim X (offset 28)
+        let aim_x = f32::from_le_bytes([data[28], data[29], data[30], data[31]]);
+        assert_eq!(aim_x, 1.0);
+
+        // Verificar MovementState (offset 40)
+        let state = u16::from_le_bytes([data[40], data[41]]);
+        assert_eq!(state, 0x0010);
+
+        // Verificar Time (offset 42)
+        let time = u32::from_le_bytes([data[42], data[43], data[44], data[45]]);
+        assert_eq!(time, 0);
+    }
+
+    #[test]
+    fn test_observer_view_keyframe_format() {
+        let data = build_observer_view_keyframe("TestPlayer", 0, 0);
         assert!(!data.is_empty());
-        // 2 bitfields + 3*f32 pos + 4*f32 rot + 3*f32 vel + u16 state
-        // = 2 + 12 + 16 + 12 + 2 = 44 bytes
-        assert_eq!(data.len(), 44);
+
+        // Primeiros 4 bytes devem ser bitfield = 0x00 0x00 0x00 0x00
+        assert_eq!(&data[0..4], &[0x00, 0x00, 0x00, 0x00]);
+
+        // StaticInfo comeca no offset 4 com DisplayName null-terminated
+        let name_end = 4 + "TestPlayer".len();
+        assert_eq!(&data[4..name_end], b"TestPlayer");
+        assert_eq!(data[name_end], 0x00); // null terminator
+
+        // Deve conter CharacterState = Living (6) em algum lugar
+        // e CurrentHealthPct = 100
+        assert!(data.len() > 50, "ObserverView deve ter tamanho razoavel, tem {} bytes", data.len());
+    }
+
+    #[test]
+    fn test_base_controller_keyframe_format() {
+        let guid: u64 = 0xFFFF000000000100;
+        let data = build_base_controller_keyframe(guid, [297.0, 326.0, 434.0]);
+
+        // Primeiros 8 bytes = player_guid LE
+        let stored_guid = u64::from_le_bytes([
+            data[0], data[1], data[2], data[3],
+            data[4], data[5], data[6], data[7],
+        ]);
+        assert_eq!(stored_guid, guid);
+
+        // Proximos 5 bytes = bitfield (todos 0)
+        assert_eq!(&data[8..13], &[0x00, 0x00, 0x00, 0x00, 0x00]);
+
+        // Deve ter tamanho substancial (muitos campos non-nullable)
+        assert!(data.len() > 200, "BaseController deve ter tamanho grande, tem {} bytes", data.len());
+    }
+
+    #[test]
+    fn test_base_controller_contains_spawn_pose() {
+        let data = build_base_controller_keyframe(0x100, [297.0, 326.0, 434.0]);
+
+        // Verificar que a posicao 297.0 aparece nos dados (como f32 LE)
+        let pos_x_bytes = 297.0_f32.to_le_bytes();
+        let found = data.windows(4).any(|w| w == pos_x_bytes);
+        assert!(found, "SpawnPose deve conter a posicao X=297.0");
+    }
+
+    #[test]
+    fn test_base_controller_contains_health() {
+        let data = build_base_controller_keyframe(0x100, [0.0, 0.0, 0.0]);
+
+        // Verificar que 25000 (health) aparece como i32 LE
+        let health_bytes = 25000_i32.to_le_bytes();
+        let count = data.windows(4).filter(|w| *w == health_bytes).count();
+        // Deve aparecer pelo menos 2x (CurrentHealth e MaxHealth.value)
+        assert!(count >= 2, "Deve conter health=25000 pelo menos 2x, encontrou {}x", count);
     }
 }
