@@ -307,32 +307,28 @@ pub struct EnterZone {
 }
 
 impl EnterZone {
-    /// Cria um EnterZone com valores de referencia do PIN project
+    /// Cria um EnterZone com valores minimos/seguros para zone loading
+    /// Timestamps zerados para evitar rejeicao pelo engine C++ de 32-bit
     pub fn new_default(instance_id: u64, zone_id: u32, zone_name: &str) -> Self {
-        let now_micros = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_micros() as u64;
-
         Self {
             instance_id,
             zone_id,
-            zone_timestamp: now_micros as i64,
+            zone_timestamp: 0,                      // Zero - timestamps UNIX enormes podem causar rejeicao
             zone_flags: 0,
-            zone_owner: "r5_exec".to_string(), // PIN usa "r5_exec"
+            zone_owner: String::new(),               // Vazio - evita validacao de whitelist
             streaming_protocol: 0x4C5F,
-            svn_revision: 0x0C9F5,             // PIN usa 51701
+            svn_revision: 0x0C9F5,                   // 51701 decimal (PIN reference)
             hotfix_level: 0,
             match_id: 0,
             unk2: 0,
-            simulation_seed_ms: 0x63E2DB5E,    // PIN usa este valor
+            simulation_seed_ms: 0,                   // Zero - valor stale pode causar problemas
             zone_name: zone_name.to_string(),
             have_dev_zone_info: false,
             fiction_datetime_offset_micros: 0,
             day_length_factor: 12.0,
-            day_phase_offset: 0.896445870399,  // PIN usa este valor
-            game_clock_micro_1: now_micros,
-            game_clock_micro_2: now_micros,
+            day_phase_offset: 0.0,                   // Zero - simplificar
+            game_clock_micro_1: 0,                   // Zero - timestamps UNIX enormes podem causar rejeicao
+            game_clock_micro_2: 0,                   // Zero
             game_clock_timescale: 1.0,
             game_clock_unk3: 0,
             game_clock_unk4: 0,
@@ -385,6 +381,26 @@ impl EnterZone {
         // SpectatorModeFlag
         buf.put_i8(self.spectator_mode_flag);
 
+        buf.to_vec()
+    }
+}
+
+/// MatrixStatus - servidor informa o client sobre estado do servidor
+/// Enviada no canal 1 (reliable) periodicamente ou apos WelcomeToTheMatrix
+/// Formato baseado em AeroMessages MatrixStatus
+pub struct MatrixStatus;
+
+impl MatrixStatus {
+    pub fn serialize() -> Vec<u8> {
+        let mut buf = BytesMut::with_capacity(16);
+        buf.put_i32_le(0);   // bytes_per_second
+        buf.put_i32_le(0);   // shaped_bytes
+        buf.put_u8(0);       // packet_uploss
+        buf.put_u8(0);       // packet_downloss
+        buf.put_u16_le(0);   // unk5
+        buf.put_u8(0);       // is_everlasting_gobsocket
+        buf.put_u8(0);       // have_unk7 (0 = no unk7 array)
+        buf.put_u16_le(0);   // unk8 array length (0 = empty)
         buf.to_vec()
     }
 }
@@ -579,5 +595,65 @@ mod tests {
     #[test]
     fn test_parse_control_empty() {
         assert!(parse_control_payload(&[]).is_none());
+    }
+
+    #[test]
+    fn test_enter_zone_byte_layout() {
+        let ez = EnterZone {
+            instance_id: 0x000001C000000001,
+            zone_id: 448,
+            zone_timestamp: 0,
+            zone_flags: 0,
+            zone_owner: String::new(),  // empty = just null terminator
+            streaming_protocol: 0x4C5F,
+            svn_revision: 0x0C9F5,
+            hotfix_level: 0,
+            match_id: 0,
+            unk2: 0,
+            simulation_seed_ms: 0,
+            zone_name: "New Eden".to_string(),
+            have_dev_zone_info: false,
+            fiction_datetime_offset_micros: 0,
+            day_length_factor: 12.0,
+            day_phase_offset: 0.0,
+            game_clock_micro_1: 0,
+            game_clock_micro_2: 0,
+            game_clock_timescale: 1.0,
+            game_clock_unk3: 0,
+            game_clock_unk4: 0,
+            game_clock_paused: false,
+            spectator_mode_flag: 0,
+        };
+        let bytes = ez.serialize();
+
+        // instance_id(8) + zone_id(4) + timestamp(8) + flags(1) + owner "\0"(1)
+        // + streaming(2) + svn(4) + hotfix(1) + match(8) + unk2(1) + seed(4)
+        // + name "New Eden\0"(9) + dev_info(1)
+        // + fiction(8) + day_len(4) + day_phase(4)
+        // + clock1(8) + clock2(8) + timescale_f64(8) + unk3(8) + unk4(8) + paused(1)
+        // + spectator(1)
+        // = 8+4+8+1+1+2+4+1+8+1+4+9+1+8+4+4+8+8+8+8+8+1+1 = 110
+        assert_eq!(bytes.len(), 110, "EnterZone with empty owner should be 110 bytes");
+
+        // Verify instance_id LE
+        assert_eq!(&bytes[0..8], &[0x01, 0x00, 0x00, 0x00, 0xC0, 0x01, 0x00, 0x00]);
+        // Verify zone_id = 448 LE
+        assert_eq!(&bytes[8..12], &[0xC0, 0x01, 0x00, 0x00]);
+        // Verify zone_timestamp = 0
+        assert_eq!(&bytes[12..20], &[0; 8]);
+        // Verify zone_flags = 0
+        assert_eq!(bytes[20], 0);
+        // Verify zone_owner = empty string (just null terminator)
+        assert_eq!(bytes[21], 0x00);
+        // Verify streaming_protocol = 0x4C5F LE
+        assert_eq!(&bytes[22..24], &[0x5F, 0x4C]);
+    }
+
+    #[test]
+    fn test_matrix_status_serialize() {
+        let bytes = MatrixStatus::serialize();
+        // i32(4) + i32(4) + u8(1) + u8(1) + u16(2) + u8(1) + u8(1) + u16(2) = 16
+        assert_eq!(bytes.len(), 16);
+        assert!(bytes.iter().all(|&b| b == 0), "All zeros for minimal status");
     }
 }

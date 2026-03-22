@@ -14,9 +14,9 @@ use tokio::net::UdpSocket;
 use super::gss;
 use super::messages::{
     self, MatrixAck, TimeSyncRequest, TimeSyncResponse,
-    WelcomeToTheMatrix, EnterZone, LoginMessage,
+    WelcomeToTheMatrix, EnterZone, LoginMessage, MatrixStatus,
     CTRL_MATRIX_ACK, CTRL_GSS_ACK, CTRL_TIME_SYNC_REQUEST, CTRL_TIME_SYNC_RESPONSE,
-    MSG_LOGIN, MSG_WELCOME_TO_THE_MATRIX, MSG_ENTER_ZONE,
+    MSG_LOGIN, MSG_WELCOME_TO_THE_MATRIX, MSG_ENTER_ZONE, MSG_MATRIX_STATUS,
     MSG_ENTER_ZONE_ACK, MSG_CLIENT_STATUS, MSG_CLIENT_PREFERENCES,
     MSG_SUPER_PING, MSG_KEYFRAME_REQUEST,
 };
@@ -400,9 +400,10 @@ impl MatrixServer {
         match msg_id {
             CTRL_MATRIX_ACK => {
                 // Client enviando ACK para nossos pacotes reliable (canal 1)
+                // DIAGNOSTICO: se client ACK seq=1 mas nao seq=2, EnterZone falhou na deserializacao
                 if let Some(ack) = MatrixAck::parse(msg_data) {
-                    tracing::debug!(
-                        "MatrixAck recebido: next_seq={}, ack_for={} de socket 0x{:08X}",
+                    tracing::info!(
+                        "MatrixAck recebido: next_seq={}, ack_for={} de socket 0x{:08X} (seq1=Welcome, seq2=MatrixStatus, seq3=EnterZone)",
                         ack.next_seq_num,
                         ack.ack_for_num,
                         socket_id
@@ -675,20 +676,29 @@ impl MatrixServer {
         // Converter char_guid para entity_id (byte 0 = 0x00, formato PIN)
         let entity_id = gss::entity_id_from_guid(char_guid);
 
-        // Enviar WelcomeToTheMatrix com entity_id (byte 0 = 0x00)
-        // PIN usa player_id com byte baixo = 0x00 (entity format)
+        // === FASE 2: Enviar sequencia de mensagens reliable ===
+
+        // 1. WelcomeToTheMatrix com entity_id (byte 0 = 0x00)
         self.send_welcome_to_matrix(addr, socket_id, entity_id).await?;
 
-        // Enviar EnterZone IMEDIATAMENTE apos WelcomeToTheMatrix (sem delay)
-        // PIN envia em sequencia imediata, sem esperar ACK
-        let zone_id = 448; // New Eden (Coral Forest) - zona principal open world
+        // Delay para client processar seq=1 antes de receber seq=2
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 2. MatrixStatus - informa ao client que o servidor esta pronto
+        self.send_matrix_status(addr, socket_id).await?;
+
+        // Delay para client processar
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 3. EnterZone - instrui client a carregar zona 448 (New Eden)
+        let zone_id = 448;
         self.send_enter_zone(addr, socket_id, zone_id).await?;
 
-        // Aguardar EnterZoneAck real do client (msg_id=18 no canal 1)
-        // O client carrega a zona e envia EnterZoneAck quando pronto.
-        // Os keyframes serao enviados quando handle_enter_zone_ack for chamado
-        // pelo loop principal ao receber msg_id=18.
-        // Se o client NAO enviar EnterZoneAck em 30s, a sessao expira.
+        // 4. Enviar keyframes apos delay para client processar EnterZone
+        // O client NAO envia EnterZoneAck como prerequisito para keyframes.
+        // PIN envia keyframes imediatamente apos EnterZone.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        self.send_initial_keyframes(addr, socket_id).await?;
 
         Ok(())
     }
@@ -741,7 +751,79 @@ impl MatrixServer {
         self.sessions.set_zone(socket_id, zone_id).await;
 
         let msg_data = enter_zone.serialize();
+
+        // Logging diagnostico: hex dump completo do EnterZone
+        tracing::info!(
+            "EnterZone serializado [{}B]: {}",
+            msg_data.len(),
+            msg_data.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(" ")
+        );
+
         self.send_reliable(addr, socket_id, MSG_ENTER_ZONE, &msg_data).await
+    }
+
+    /// Envia MatrixStatus para o client (canal 1, reliable)
+    async fn send_matrix_status(
+        &self,
+        addr: SocketAddr,
+        socket_id: u32,
+    ) -> anyhow::Result<()> {
+        tracing::info!("Enviando MatrixStatus para socket 0x{:08X}", socket_id);
+        let msg_data = MatrixStatus::serialize();
+        self.send_reliable(addr, socket_id, MSG_MATRIX_STATUS, &msg_data).await
+    }
+
+    /// Envia keyframes iniciais do personagem (BaseController, ObserverView, MovementView)
+    async fn send_initial_keyframes(
+        &self,
+        addr: SocketAddr,
+        socket_id: u32,
+    ) -> anyhow::Result<()> {
+        let session = match self.sessions.get_session(socket_id).await {
+            Some(s) => s,
+            None => {
+                tracing::error!("send_initial_keyframes: sessao 0x{:08X} nao encontrada", socket_id);
+                return Ok(());
+            }
+        };
+
+        let character_guid = session.character_guid;
+        if character_guid == 0 {
+            tracing::error!("send_initial_keyframes: character_guid=0 para socket 0x{:08X}", socket_id);
+            return Ok(());
+        }
+
+        let entity_id = gss::entity_id_from_guid(character_guid);
+        tracing::info!(
+            "Enviando keyframes iniciais: character_guid=0x{:016X}, entity_id=0x{:016X}",
+            character_guid, entity_id
+        );
+
+        let spawn_pos: [f32; 3] = [297.0, 326.0, 434.0];
+
+        // 1. BaseController Keyframe (controller_id=2, msg_id=4)
+        let base_data = gss::build_base_controller_keyframe(character_guid, spawn_pos);
+        tracing::info!("Enviando BaseController Keyframe: {} bytes", base_data.len());
+        self.send_reliable_gss(addr, socket_id, gss::CTRL_CHARACTER_BASE, entity_id, gss::GSS_CONTROLLER_KEYFRAME, &base_data).await?;
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 2. ObserverView Keyframe (controller_id=8, msg_id=3)
+        let observer_data = gss::build_observer_view_keyframe("Player", 1, 0);
+        tracing::info!("Enviando ObserverView Keyframe: {} bytes", observer_data.len());
+        self.send_reliable_gss(addr, socket_id, gss::CTRL_CHARACTER_OBSERVER_VIEW, entity_id, gss::GSS_VIEW_KEYFRAME, &observer_data).await?;
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 3. MovementView Keyframe (controller_id=12, msg_id=3)
+        let spawn_rot: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+        let spawn_aim: [f32; 3] = [1.0, 0.0, 0.0];
+        let movement_data = gss::build_movement_view_keyframe(spawn_pos, spawn_rot, spawn_aim, 0x0010);
+        tracing::info!("Enviando MovementView Keyframe: {} bytes", movement_data.len());
+        self.send_reliable_gss(addr, socket_id, gss::CTRL_CHARACTER_MOVEMENT_VIEW, entity_id, gss::GSS_VIEW_KEYFRAME, &movement_data).await?;
+
+        tracing::info!("=== Keyframes iniciais enviados para socket 0x{:08X} ===", socket_id);
+        Ok(())
     }
 
     // ==================== Fase 3: Time Sync ====================
@@ -838,125 +920,20 @@ impl MatrixServer {
 
     // ==================== Fase 5: GSS Entity Spawn ====================
 
-    /// Processa EnterZoneAck do client e envia os keyframes iniciais da entidade
-    /// do jogador. Sem estes keyframes, o mundo fica vazio.
+    /// Processa EnterZoneAck do client (msg_id=18)
+    /// Se o client envia esta mensagem, a zona carregou com sucesso.
+    /// Os keyframes ja foram enviados por send_initial_keyframes, entao
+    /// aqui apenas logamos o sucesso.
     async fn handle_enter_zone_ack(
         &self,
-        addr: SocketAddr,
+        _addr: SocketAddr,
         socket_id: u32,
         msg_data: &[u8],
     ) -> anyhow::Result<()> {
         tracing::info!(
-            "=== EnterZoneAck recebido de socket 0x{:08X} ({} bytes) ===",
+            "=== EnterZoneAck RECEBIDO de socket 0x{:08X} ({} bytes) - ZONA CARREGADA COM SUCESSO! ===",
             socket_id,
             msg_data.len()
-        );
-
-        // Buscar dados da sessao (character_guid, etc)
-        let session = match self.sessions.get_session(socket_id).await {
-            Some(s) => s,
-            None => {
-                tracing::error!(
-                    "EnterZoneAck: sessao 0x{:08X} nao encontrada",
-                    socket_id
-                );
-                return Ok(());
-            }
-        };
-
-        let character_guid = session.character_guid;
-        if character_guid == 0 {
-            tracing::error!(
-                "EnterZoneAck: character_guid=0 para socket 0x{:08X}, nao pode spawnar",
-                socket_id
-            );
-            return Ok(());
-        }
-
-        // Calcular entity_id mascarando byte 0
-        let entity_id = gss::entity_id_from_guid(character_guid);
-
-        tracing::info!(
-            "Spawnando entidade: character_guid=0x{:016X}, entity_id=0x{:016X}",
-            character_guid,
-            entity_id
-        );
-
-        // Posicao de spawn padrao (New Eden / Copacabana)
-        let spawn_pos: [f32; 3] = [297.0, 326.0, 434.0];
-        let spawn_rot: [f32; 4] = [0.0, 0.0, 0.0, 1.0]; // identidade
-        let spawn_aim: [f32; 3] = [1.0, 0.0, 0.0]; // direcao de mira (forward)
-
-        // Pequeno delay para garantir que o client processou o EnterZone
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        // 1. Enviar BaseController Keyframe (controller_id=2, msg_id=4)
-        let base_data = gss::build_base_controller_keyframe(character_guid, spawn_pos);
-        tracing::info!(
-            "Enviando BaseController Keyframe: {} bytes para entity 0x{:016X}",
-            base_data.len(),
-            entity_id
-        );
-        self.send_reliable_gss(
-            addr,
-            socket_id,
-            gss::CTRL_CHARACTER_BASE,
-            entity_id,
-            gss::GSS_CONTROLLER_KEYFRAME,
-            &base_data,
-        ).await?;
-
-        // Pequeno delay entre keyframes
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        // 2. Enviar ObserverView Keyframe (controller_id=8, msg_id=3)
-        let observer_data = gss::build_observer_view_keyframe(
-            "Player",  // Nome padrao para MVP
-            1,         // gender: male
-            0,         // race: human
-        );
-        tracing::info!(
-            "Enviando ObserverView Keyframe: {} bytes para entity 0x{:016X}",
-            observer_data.len(),
-            entity_id
-        );
-        self.send_reliable_gss(
-            addr,
-            socket_id,
-            gss::CTRL_CHARACTER_OBSERVER_VIEW,
-            entity_id,
-            gss::GSS_VIEW_KEYFRAME,
-            &observer_data,
-        ).await?;
-
-        // Pequeno delay entre keyframes
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        // 3. Enviar MovementView Keyframe (controller_id=12, msg_id=3)
-        let movement_data = gss::build_movement_view_keyframe(
-            spawn_pos,
-            spawn_rot,
-            spawn_aim,
-            0x0010, // MovementState = Standing
-        );
-        tracing::info!(
-            "Enviando MovementView Keyframe: {} bytes para entity 0x{:016X}",
-            movement_data.len(),
-            entity_id
-        );
-        self.send_reliable_gss(
-            addr,
-            socket_id,
-            gss::CTRL_CHARACTER_MOVEMENT_VIEW,
-            entity_id,
-            gss::GSS_VIEW_KEYFRAME,
-            &movement_data,
-        ).await?;
-
-        tracing::info!(
-            "=== Entity spawn completo para socket 0x{:08X}, entity 0x{:016X} ===",
-            socket_id,
-            entity_id
         );
 
         Ok(())
