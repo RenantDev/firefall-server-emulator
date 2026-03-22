@@ -679,7 +679,7 @@ impl MatrixServer {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Enviar EnterZone (Fase 2)
-        let zone_id = 1; // Zona padrao (Copacabana/New Eden)
+        let zone_id = 448; // New Eden (Coral Forest) - zona principal open world
         self.send_enter_zone(addr, socket_id, zone_id).await?;
 
         // Pequeno delay para dar tempo ao client processar o EnterZone
@@ -726,7 +726,7 @@ impl MatrixServer {
         // Gerar instance_id unico baseado no zone_id
         let instance_id = 0x0000_0001_0000_0000u64 | (zone_id as u64);
 
-        let enter_zone = EnterZone::new_default(instance_id, zone_id, "Copacabana Beta");
+        let enter_zone = EnterZone::new_default(instance_id, zone_id, "New Eden");
 
         tracing::info!(
             "Enviando EnterZone: zone_id={}, instance=0x{:016X}, zone_name='{}' para socket 0x{:08X}",
