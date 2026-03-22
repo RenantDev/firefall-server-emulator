@@ -125,6 +125,14 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
         // Trade
         .route("/api/v3/trade/products", get(handlers::trade_products))
+        .route("/api/v3/trade/products/:product_id", get(handlers::trade_product_by_id))
+
+        // Dashboard (conductor)
+        .route("/api/v4/dashboard/conductor-events", get(handlers::conductor_events))
+        .route("/api/v4/dashboard/conductor-assets", get(handlers::conductor_assets))
+
+        // Products.json (store)
+        .route("/products.json", get(handlers::products_json))
 
         // Migration
         .route(

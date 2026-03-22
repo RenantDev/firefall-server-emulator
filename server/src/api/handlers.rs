@@ -685,12 +685,25 @@ pub async fn server_list(
     }
 
     let matrix_host = std::env::var("PUBLIC_MATRIX_HOST").unwrap_or_else(|_| "127.0.0.1".into());
-    let matrix_port = std::env::var("MATRIX_PORT").unwrap_or_else(|_| "25000".into());
+    let matrix_port = std::env::var("MATRIX_PUBLIC_PORT")
+        .unwrap_or_else(|_| std::env::var("MATRIX_PORT").unwrap_or_else(|_| "25000".into()));
 
-    // PIN retorna zone_list VAZIA. Isso forca pveMatchmaking=true no Lua,
-    // o que faz o engine C++ usar o Oracle internamente para encontrar o servidor.
-    let _ = (matrix_host, matrix_port); // unused com zone_list vazia
-    let response = r#"{"zone_list":[]}"#;
+    // Retornar zona New Eden com matrix_url para conexao direta
+    // O client em modo dev usa matrix_url diretamente; em release usa Oracle.
+    // Retornando a zona aqui permite ao client pular o Oracle e conectar diretamente.
+    let response = serde_json::json!({
+        "zone_list": [
+            {
+                "zone_name": "Copacabana Beta",
+                "matrix_url": format!("{}:{}", matrix_host, matrix_port),
+                "match": 0,
+                "revision": 0,
+                "protocol_version": 309608,
+                "owner": "r5_exec",
+                "players": 0
+            }
+        ]
+    }).to_string();
 
     tracing::info!("  Server list response: {}", response);
 
@@ -1011,6 +1024,56 @@ pub async fn operator_check(
         "replay_host": frontend_host,
         "rhsigscan_host": api_host
     })))
+}
+
+// ============================================================================
+// Dashboard / Conductor
+// ============================================================================
+
+/// GET /api/v4/dashboard/conductor-events
+pub async fn conductor_events() -> axum::response::Response {
+    tracing::info!("=== GET /api/v4/dashboard/conductor-events ===");
+    let response = serde_json::json!([]);
+    axum::response::Response::builder()
+        .status(200)
+        .header("Content-Type", "application/json")
+        .body(axum::body::Body::from(response.to_string()))
+        .unwrap()
+}
+
+/// GET /api/v4/dashboard/conductor-assets
+pub async fn conductor_assets() -> axum::response::Response {
+    tracing::info!("=== GET /api/v4/dashboard/conductor-assets ===");
+    let response = serde_json::json!([]);
+    axum::response::Response::builder()
+        .status(200)
+        .header("Content-Type", "application/json")
+        .body(axum::body::Body::from(response.to_string()))
+        .unwrap()
+}
+
+/// GET /products.json
+pub async fn products_json() -> axum::response::Response {
+    tracing::info!("=== GET /products.json ===");
+    let response = serde_json::json!([]);
+    axum::response::Response::builder()
+        .status(200)
+        .header("Content-Type", "application/json")
+        .body(axum::body::Body::from(response.to_string()))
+        .unwrap()
+}
+
+/// GET /api/v3/trade/products/:product_id
+pub async fn trade_product_by_id(
+    Path(product_id): Path<String>,
+) -> axum::response::Response {
+    tracing::info!("=== GET /api/v3/trade/products/{} ===", product_id);
+    let response = serde_json::json!({});
+    axum::response::Response::builder()
+        .status(200)
+        .header("Content-Type", "application/json")
+        .body(axum::body::Body::from(response.to_string()))
+        .unwrap()
 }
 
 // ============================================================================

@@ -682,12 +682,12 @@ impl MatrixServer {
         let zone_id = 448; // New Eden (Coral Forest) - zona principal open world
         self.send_enter_zone(addr, socket_id, zone_id).await?;
 
-        // Pequeno delay para dar tempo ao client processar o EnterZone
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Esperar o client processar o EnterZone e enviar MatrixAck
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-        // Enviar GSS keyframes imediatamente apos EnterZone
-        // O client NAO envia EnterZoneAck antes de precisar dos keyframes,
-        // ele envia ClientStatus diretamente. Entao enviamos os keyframes aqui.
+        // Enviar GSS keyframes. O client NAO envia EnterZoneAck como mensagem
+        // separada no canal 1. O MatrixAck do EnterZone no canal 0 serve como
+        // confirmacao. O proximo msg reliable do client sera ClientStatus.
         self.handle_enter_zone_ack(addr, socket_id, &[]).await?;
 
         Ok(())
@@ -723,8 +723,9 @@ impl MatrixServer {
         socket_id: u32,
         zone_id: u32,
     ) -> anyhow::Result<()> {
-        // Gerar instance_id unico baseado no zone_id
-        let instance_id = 0x0000_0001_0000_0000u64 | (zone_id as u64);
+        // Gerar instance_id: zone_id nos bits altos, instance number nos bits baixos
+        // Formato: [zone_id:32][instance_num:32]
+        let instance_id = ((zone_id as u64) << 32) | 1u64;
 
         let enter_zone = EnterZone::new_default(instance_id, zone_id, "New Eden");
 
