@@ -802,42 +802,73 @@ impl MatrixServer {
 
         let spawn_pos: [f32; 3] = [297.0, 326.0, 434.0];
 
-        // 1. BaseController Keyframe (controller_id=2, msg_id=4)
+        // === CONTROLLER KEYFRAMES (msg_id=4, com player_guid prefix) ===
+        // Enviados apenas ao jogador que controla a entidade
+
+        // 1. BaseController (ctrl 2)
         let base_data = gss::build_base_controller_keyframe(character_guid, spawn_pos);
         tracing::info!("Enviando BaseController Keyframe: {} bytes", base_data.len());
         self.send_reliable_gss(addr, socket_id, gss::CTRL_CHARACTER_BASE, entity_id, gss::GSS_CONTROLLER_KEYFRAME, &base_data).await?;
 
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
-        // 2. ObserverView Keyframe (controller_id=8, msg_id=3)
+        // 2. CombatController (ctrl 5)
+        let combat_ctrl_data = gss::build_combat_controller_keyframe(character_guid);
+        tracing::info!("Enviando CombatController Keyframe: {} bytes", combat_ctrl_data.len());
+        self.send_reliable_gss(addr, socket_id, gss::CTRL_CHARACTER_COMBAT_CONTROLLER, entity_id, gss::GSS_CONTROLLER_KEYFRAME, &combat_ctrl_data).await?;
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        // 3. LocalEffectsController (ctrl 6)
+        let effects_data = gss::build_local_effects_controller_keyframe(character_guid);
+        tracing::info!("Enviando LocalEffectsController Keyframe: {} bytes", effects_data.len());
+        self.send_reliable_gss(addr, socket_id, gss::CTRL_CHARACTER_LOCAL_EFFECTS_CONTROLLER, entity_id, gss::GSS_CONTROLLER_KEYFRAME, &effects_data).await?;
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        // 4. MissionAndMarkerController (ctrl 4)
+        let mission_data = gss::build_mission_controller_keyframe(character_guid);
+        tracing::info!("Enviando MissionController Keyframe: {} bytes", mission_data.len());
+        self.send_reliable_gss(addr, socket_id, gss::CTRL_CHARACTER_MISSION_CONTROLLER, entity_id, gss::GSS_CONTROLLER_KEYFRAME, &mission_data).await?;
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        // === VIEW KEYFRAMES (msg_id=3, sem player_guid prefix) ===
+
+        // 5. ObserverView (ctrl 8)
         let observer_data = gss::build_observer_view_keyframe("Player", 1, 0);
-        tracing::info!("Enviando ObserverView Keyframe: {} bytes", observer_data.len());
         self.send_reliable_gss(addr, socket_id, gss::CTRL_CHARACTER_OBSERVER_VIEW, entity_id, gss::GSS_VIEW_KEYFRAME, &observer_data).await?;
 
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
-        // 3. EquipmentView Keyframe (controller_id=9, msg_id=3)
+        // 6. EquipmentView (ctrl 9)
         let equipment_data = gss::build_equipment_view_keyframe();
-        tracing::info!("Enviando EquipmentView Keyframe: {} bytes", equipment_data.len());
         self.send_reliable_gss(addr, socket_id, gss::CTRL_CHARACTER_EQUIPMENT_VIEW, entity_id, gss::GSS_VIEW_KEYFRAME, &equipment_data).await?;
 
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
-        // 4. CombatView Keyframe (controller_id=11, msg_id=3)
-        let combat_data = gss::build_combat_view_keyframe();
-        tracing::info!("Enviando CombatView Keyframe: {} bytes", combat_data.len());
-        self.send_reliable_gss(addr, socket_id, gss::CTRL_CHARACTER_COMBAT_VIEW, entity_id, gss::GSS_VIEW_KEYFRAME, &combat_data).await?;
+        // 7. CombatView (ctrl 11)
+        let combat_view_data = gss::build_combat_view_keyframe();
+        self.send_reliable_gss(addr, socket_id, gss::CTRL_CHARACTER_COMBAT_VIEW, entity_id, gss::GSS_VIEW_KEYFRAME, &combat_view_data).await?;
 
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
-        // 5. MovementView Keyframe (controller_id=12, msg_id=3)
+        // 8. MovementView (ctrl 12)
         let spawn_rot: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
         let spawn_aim: [f32; 3] = [1.0, 0.0, 0.0];
         let movement_data = gss::build_movement_view_keyframe(spawn_pos, spawn_rot, spawn_aim, 0x0010);
-        tracing::info!("Enviando MovementView Keyframe: {} bytes", movement_data.len());
         self.send_reliable_gss(addr, socket_id, gss::CTRL_CHARACTER_MOVEMENT_VIEW, entity_id, gss::GSS_VIEW_KEYFRAME, &movement_data).await?;
 
-        tracing::info!("=== Keyframes iniciais enviados para socket 0x{:08X} ===", socket_id);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // === CRITICAL: CharacterLoaded event (ctrl 2, msg_id=148) ===
+        // Esta mensagem sinaliza ao client que o personagem esta completamente
+        // carregado. Sem ela, a loading screen NUNCA fecha.
+        let loaded_data = gss::build_character_loaded();
+        tracing::info!(">>> Enviando CharacterLoaded event (msg_id=148) para entity 0x{:016X} <<<", entity_id);
+        self.send_reliable_gss(addr, socket_id, gss::CTRL_CHARACTER_BASE, entity_id, gss::GSS_CHARACTER_LOADED, &loaded_data).await?;
+
+        tracing::info!("=== Keyframes iniciais + CharacterLoaded enviados para socket 0x{:08X} ===", socket_id);
         Ok(())
     }
 

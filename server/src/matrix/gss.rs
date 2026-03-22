@@ -23,6 +23,9 @@ pub const GSS_UPDATE: u8 = 1;
 pub const GSS_VIEW_KEYFRAME: u8 = 3;
 /// Keyframe de controller (BaseController, etc)
 pub const GSS_CONTROLLER_KEYFRAME: u8 = 4;
+/// CharacterLoaded event - sinaliza ao client que o personagem esta pronto
+/// Controller ID 2 (BaseController), Message ID 148 (0x94)
+pub const GSS_CHARACTER_LOADED: u8 = 148;
 
 // ==================== Controller IDs ====================
 // Cada controller gerencia um aspecto diferente da entidade
@@ -31,6 +34,12 @@ pub const GSS_CONTROLLER_KEYFRAME: u8 = 4;
 pub const CTRL_CHARACTER_BASE: u8 = 2;
 /// ObserverView - informacoes visiveis a outros jogadores (nome, visuais)
 pub const CTRL_CHARACTER_OBSERVER_VIEW: u8 = 8;
+/// MissionAndMarkerController - missoes e markers
+pub const CTRL_CHARACTER_MISSION_CONTROLLER: u8 = 4;
+/// CombatController - sistema de combate principal
+pub const CTRL_CHARACTER_COMBAT_CONTROLLER: u8 = 5;
+/// LocalEffectsController - efeitos locais do personagem
+pub const CTRL_CHARACTER_LOCAL_EFFECTS_CONTROLLER: u8 = 6;
 /// EquipmentView - equipamento do personagem (armas, itens)
 pub const CTRL_CHARACTER_EQUIPMENT_VIEW: u8 = 9;
 /// CombatView - dados de combate (habilidades, cooldowns)
@@ -191,6 +200,58 @@ fn put_character_stats(buf: &mut BytesMut) {
     buf.put_u16_le(0);
     // AttributeCategories2 count: u16
     buf.put_u16_le(0);
+}
+
+// ==================== CombatController Keyframe ====================
+
+/// Constroi um CombatController Keyframe (controller_id=5, msg_id=4)
+/// Controller keyframe: prefixo de 8 bytes com player_guid + bitfield
+pub fn build_combat_controller_keyframe(player_guid: u64) -> Vec<u8> {
+    let mut buf = BytesMut::with_capacity(32);
+    // Prefixo de 8 bytes com player_guid (identifica o jogador local)
+    buf.put_u64_le(player_guid);
+    // Bitfield: 5 bytes com todos os campos nullable ausentes
+    buf.put_u8(0xFF);
+    buf.put_u8(0xFF);
+    buf.put_u8(0xFF);
+    buf.put_u8(0xFF);
+    buf.put_u8(0xFF);
+    buf.to_vec()
+}
+
+// ==================== LocalEffectsController Keyframe ====================
+
+/// Constroi um LocalEffectsController Keyframe (controller_id=6, msg_id=4)
+/// Controller keyframe: prefixo de 8 bytes com player_guid + bitfield
+pub fn build_local_effects_controller_keyframe(player_guid: u64) -> Vec<u8> {
+    let mut buf = BytesMut::with_capacity(16);
+    buf.put_u64_le(player_guid);
+    // Bitfield: 2 bytes (poucas nullable fields)
+    buf.put_u8(0xFF);
+    buf.put_u8(0xFF);
+    buf.to_vec()
+}
+
+// ==================== MissionAndMarkerController Keyframe ====================
+
+/// Constroi um MissionAndMarkerController Keyframe (controller_id=4, msg_id=4)
+/// Controller keyframe: prefixo de 8 bytes com player_guid + bitfield
+pub fn build_mission_controller_keyframe(player_guid: u64) -> Vec<u8> {
+    let mut buf = BytesMut::with_capacity(16);
+    buf.put_u64_le(player_guid);
+    // Bitfield: 2 bytes
+    buf.put_u8(0xFF);
+    buf.put_u8(0xFF);
+    buf.to_vec()
+}
+
+// ==================== CharacterLoaded Event ====================
+
+/// Constroi a mensagem CharacterLoaded (controller_id=2, msg_id=148)
+/// Esta e a mensagem critica que sinaliza ao client que o personagem
+/// esta completamente carregado e pronto. Sem ela, a loading screen nao fecha.
+pub fn build_character_loaded() -> Vec<u8> {
+    vec![0x00, 0x00] // sbyte Unk1 = 0, sbyte Unk2 = 0
 }
 
 // ==================== EquipmentView Keyframe ====================
