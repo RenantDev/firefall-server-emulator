@@ -515,7 +515,8 @@ impl MatrixServer {
                     socket_id,
                     msg_data.len()
                 );
-                // TODO: enviar keyframe com estado atual do mundo
+                // Responder ao KeyframeRequest reenviando os keyframes solicitados
+                self.handle_keyframe_request(addr, socket_id, msg_data).await?;
             }
             MSG_SUPER_PING => {
                 tracing::debug!(
@@ -815,7 +816,21 @@ impl MatrixServer {
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        // 3. MovementView Keyframe (controller_id=12, msg_id=3)
+        // 3. EquipmentView Keyframe (controller_id=9, msg_id=3)
+        let equipment_data = gss::build_equipment_view_keyframe();
+        tracing::info!("Enviando EquipmentView Keyframe: {} bytes", equipment_data.len());
+        self.send_reliable_gss(addr, socket_id, gss::CTRL_CHARACTER_EQUIPMENT_VIEW, entity_id, gss::GSS_VIEW_KEYFRAME, &equipment_data).await?;
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 4. CombatView Keyframe (controller_id=11, msg_id=3)
+        let combat_data = gss::build_combat_view_keyframe();
+        tracing::info!("Enviando CombatView Keyframe: {} bytes", combat_data.len());
+        self.send_reliable_gss(addr, socket_id, gss::CTRL_CHARACTER_COMBAT_VIEW, entity_id, gss::GSS_VIEW_KEYFRAME, &combat_data).await?;
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 5. MovementView Keyframe (controller_id=12, msg_id=3)
         let spawn_rot: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
         let spawn_aim: [f32; 3] = [1.0, 0.0, 0.0];
         let movement_data = gss::build_movement_view_keyframe(spawn_pos, spawn_rot, spawn_aim, 0x0010);
@@ -823,6 +838,85 @@ impl MatrixServer {
         self.send_reliable_gss(addr, socket_id, gss::CTRL_CHARACTER_MOVEMENT_VIEW, entity_id, gss::GSS_VIEW_KEYFRAME, &movement_data).await?;
 
         tracing::info!("=== Keyframes iniciais enviados para socket 0x{:08X} ===", socket_id);
+        Ok(())
+    }
+
+    /// Processa KeyframeRequest do client (msg_id=0x14)
+    /// O client solicita keyframes para controllers especificos de entidades.
+    /// Formato: [u8 flags] [u8 count] [entries...]
+    /// Cada entry: [u8 ctrl_id] [7B entity_id_bytes] [u16 version] [u32 time] [u8 unk]
+    async fn handle_keyframe_request(
+        &self,
+        addr: SocketAddr,
+        socket_id: u32,
+        msg_data: &[u8],
+    ) -> anyhow::Result<()> {
+        if msg_data.len() < 2 {
+            return Ok(());
+        }
+
+        let _flags = msg_data[0];
+        let count = msg_data[1];
+
+        // Buscar dados da sessao
+        let session = match self.sessions.get_session(socket_id).await {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+        let character_guid = session.character_guid;
+        if character_guid == 0 {
+            return Ok(());
+        }
+        let entity_id = gss::entity_id_from_guid(character_guid);
+
+        // Parse cada entry do request (cada entry = 15 bytes: 1+7+2+4+1)
+        let entry_size = 15;
+        let entries_data = &msg_data[2..];
+
+        for i in 0..count as usize {
+            let offset = i * entry_size;
+            if offset + 1 > entries_data.len() {
+                break;
+            }
+            let ctrl_id = entries_data[offset];
+
+            tracing::debug!(
+                "KeyframeRequest entry {}: ctrl_id={} para socket 0x{:08X}",
+                i, ctrl_id, socket_id
+            );
+
+            // Responder com o keyframe do controller solicitado
+            match ctrl_id {
+                gss::CTRL_CHARACTER_BASE => {
+                    let spawn_pos: [f32; 3] = [297.0, 326.0, 434.0];
+                    let data = gss::build_base_controller_keyframe(character_guid, spawn_pos);
+                    self.send_reliable_gss(addr, socket_id, ctrl_id, entity_id, gss::GSS_CONTROLLER_KEYFRAME, &data).await?;
+                }
+                gss::CTRL_CHARACTER_OBSERVER_VIEW => {
+                    let data = gss::build_observer_view_keyframe("Player", 1, 0);
+                    self.send_reliable_gss(addr, socket_id, ctrl_id, entity_id, gss::GSS_VIEW_KEYFRAME, &data).await?;
+                }
+                gss::CTRL_CHARACTER_EQUIPMENT_VIEW => {
+                    let data = gss::build_equipment_view_keyframe();
+                    self.send_reliable_gss(addr, socket_id, ctrl_id, entity_id, gss::GSS_VIEW_KEYFRAME, &data).await?;
+                }
+                gss::CTRL_CHARACTER_COMBAT_VIEW => {
+                    let data = gss::build_combat_view_keyframe();
+                    self.send_reliable_gss(addr, socket_id, ctrl_id, entity_id, gss::GSS_VIEW_KEYFRAME, &data).await?;
+                }
+                gss::CTRL_CHARACTER_MOVEMENT_VIEW => {
+                    let spawn_pos: [f32; 3] = [297.0, 326.0, 434.0];
+                    let spawn_rot: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+                    let spawn_aim: [f32; 3] = [1.0, 0.0, 0.0];
+                    let data = gss::build_movement_view_keyframe(spawn_pos, spawn_rot, spawn_aim, 0x0010);
+                    self.send_reliable_gss(addr, socket_id, ctrl_id, entity_id, gss::GSS_VIEW_KEYFRAME, &data).await?;
+                }
+                _ => {
+                    tracing::debug!("KeyframeRequest para controller desconhecido: {}", ctrl_id);
+                }
+            }
+        }
+
         Ok(())
     }
 

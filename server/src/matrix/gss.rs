@@ -31,6 +31,10 @@ pub const GSS_CONTROLLER_KEYFRAME: u8 = 4;
 pub const CTRL_CHARACTER_BASE: u8 = 2;
 /// ObserverView - informacoes visiveis a outros jogadores (nome, visuais)
 pub const CTRL_CHARACTER_OBSERVER_VIEW: u8 = 8;
+/// EquipmentView - equipamento do personagem (armas, itens)
+pub const CTRL_CHARACTER_EQUIPMENT_VIEW: u8 = 9;
+/// CombatView - dados de combate (habilidades, cooldowns)
+pub const CTRL_CHARACTER_COMBAT_VIEW: u8 = 11;
 /// MovementView - posicao, rotacao, velocidade, estado de movimento
 pub const CTRL_CHARACTER_MOVEMENT_VIEW: u8 = 12;
 
@@ -187,6 +191,39 @@ fn put_character_stats(buf: &mut BytesMut) {
     buf.put_u16_le(0);
     // AttributeCategories2 count: u16
     buf.put_u16_le(0);
+}
+
+// ==================== EquipmentView Keyframe ====================
+
+/// Constroi um EquipmentView Keyframe (controller_id=9, msg_id=3)
+///
+/// EquipmentView tem campos nullable. Para MVP, enviamos bitfield com
+/// todos os campos ausentes (todos bits = 0x00 seria presente, FF = ausente).
+/// Formato minimo: bitfield indicando que nao ha equipamento.
+pub fn build_equipment_view_keyframe() -> Vec<u8> {
+    let mut buf = BytesMut::with_capacity(32);
+    // Bitfield: 4 bytes com todos os campos nullable ausentes (bits=1 = ausente)
+    buf.put_u8(0xFF);
+    buf.put_u8(0xFF);
+    buf.put_u8(0xFF);
+    buf.put_u8(0xFF);
+    buf.to_vec()
+}
+
+// ==================== CombatView Keyframe ====================
+
+/// Constroi um CombatView Keyframe (controller_id=11, msg_id=3)
+///
+/// CombatView tem campos nullable para habilidades, cooldowns etc.
+/// Para MVP, enviamos bitfield com todos os campos ausentes.
+pub fn build_combat_view_keyframe() -> Vec<u8> {
+    let mut buf = BytesMut::with_capacity(32);
+    // Bitfield: 4 bytes com todos os campos nullable ausentes
+    buf.put_u8(0xFF);
+    buf.put_u8(0xFF);
+    buf.put_u8(0xFF);
+    buf.put_u8(0xFF);
+    buf.to_vec()
 }
 
 // ==================== MovementView Keyframe ====================
