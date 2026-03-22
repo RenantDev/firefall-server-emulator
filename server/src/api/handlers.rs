@@ -727,8 +727,8 @@ pub async fn zone_queue_ids() -> axum::response::Response {
 pub async fn zone_settings() -> AppResult<Vec<ZoneSettings>> {
     tracing::info!("=== GET /api/v2/zone_settings ===");
     Ok(Json(vec![ZoneSettings {
-        zone_id: 1,
-        zone_name: "Copacabana Beta".into(),
+        zone_id: 448,
+        zone_name: "New Eden".into(),
         context: "open_world".into(),
         gametype: "pve".into(),
         max_players: 100,
@@ -740,7 +740,7 @@ pub async fn zone_settings_by_id(Path(id): Path<i32>) -> AppResult<ZoneSettings>
     tracing::info!("=== GET /api/v2/zone_settings/zone/{} ===", id);
     Ok(Json(ZoneSettings {
         zone_id: id,
-        zone_name: "Copacabana Beta".into(),
+        zone_name: "New Eden".into(),
         context: "open_world".into(),
         gametype: "pve".into(),
         max_players: 100,
@@ -751,8 +751,8 @@ pub async fn zone_settings_by_id(Path(id): Path<i32>) -> AppResult<ZoneSettings>
 pub async fn zone_settings_by_context(Path(ctx): Path<String>) -> AppResult<Vec<ZoneSettings>> {
     tracing::info!("=== GET /api/v2/zone_settings/context/{} ===", ctx);
     Ok(Json(vec![ZoneSettings {
-        zone_id: 1,
-        zone_name: "Copacabana Beta".into(),
+        zone_id: 448,
+        zone_name: "New Eden".into(),
         context: "open_world".into(),
         gametype: "pve".into(),
         max_players: 100,
@@ -765,8 +765,8 @@ pub async fn zone_settings_by_gametype(
 ) -> AppResult<Vec<ZoneSettings>> {
     tracing::info!("=== GET /api/v2/zone_settings/gametype/{} ===", gametype);
     Ok(Json(vec![ZoneSettings {
-        zone_id: 1,
-        zone_name: "Copacabana Beta".into(),
+        zone_id: 448,
+        zone_name: "New Eden".into(),
         context: "open_world".into(),
         gametype: "pve".into(),
         max_players: 100,
