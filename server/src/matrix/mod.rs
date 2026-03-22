@@ -8,6 +8,7 @@
 //
 // Protocolo binario Big Endian baseado em RE do client Firefall build 1962.
 
+pub mod gss;
 pub mod messages;
 pub mod packet;
 pub mod server;

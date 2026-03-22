@@ -44,10 +44,12 @@ pub struct ClientSession {
 
     // === Campos de sequencia (Fase 1) ===
 
-    /// Proximo numero de sequencia a enviar (reliable channel)
+    /// Proximo numero de sequencia a enviar (reliable channel 1)
     pub send_seq: u16,
     /// Proximo numero de sequencia esperado do client
     pub recv_seq: u16,
+    /// Proximo numero de sequencia a enviar no canal 2 (GSS reliable)
+    pub gss_send_seq: u16,
 
     // === Campos de gameplay (Fase 2) ===
 
@@ -74,6 +76,7 @@ impl ClientSession {
             packets_sent: 1,     // contando o HEHE
             send_seq: 1, // Comeca em 1 (corresponde ao seq_start no HUGG)
             recv_seq: 0,
+            gss_send_seq: 1, // GSS canal 2 tambem comeca em 1
             character_guid: 0,
             zone_id: 0,
             login_received: false,
@@ -201,6 +204,17 @@ impl SessionManager {
         if let Some(session) = self.sessions_by_id.write().await.get_mut(&socket_id) {
             let seq = session.send_seq;
             session.send_seq = session.send_seq.wrapping_add(1);
+            Some(seq)
+        } else {
+            None
+        }
+    }
+
+    /// Incrementa e retorna o proximo gss_send_seq para enviar pacote no canal 2
+    pub async fn next_gss_send_seq(&self, socket_id: u32) -> Option<u16> {
+        if let Some(session) = self.sessions_by_id.write().await.get_mut(&socket_id) {
+            let seq = session.gss_send_seq;
+            session.gss_send_seq = session.gss_send_seq.wrapping_add(1);
             Some(seq)
         } else {
             None
